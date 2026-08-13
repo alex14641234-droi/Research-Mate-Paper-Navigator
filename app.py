@@ -21,14 +21,13 @@ def get_available_models(api_key):
         # 고객님이 요청하신 핵심 모델 버전만 필터링!
         filtered = [m for m in all_models if "3.6" in m or "3.5" in m or "3.1-pro" in m]
         
-        # 만약 발급받은 API 키 권한 문제로 해당 버전이 안 뜬다면, 아쉬운대로 전체 목록 반환
         return filtered if filtered else all_models
     except Exception:
         return []
 
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
-API_KEYS_DB_FILE = "api_keys_db.json" # API 키 유지를 위한 전용 DB 추가!
+API_KEYS_DB_FILE = "api_keys_db.json"
 
 # --- 💾 데이터베이스 & 인증 로직 ---
 def load_json(filepath):
@@ -221,28 +220,36 @@ if not st.session_state.logged_in:
     
     tab_login, tab_signup = st.tabs(["🔑 로그인", "📝 회원가입"])
     
+    # ✨ 로그인 창을 st.form으로 묶어 엔터키 입력 지원!
     with tab_login:
-        login_id = st.text_input("아이디 (ID)", key="login_id")
-        login_pw = st.text_input("비밀번호 (Password)", type="password", key="login_pw")
-        if st.button("로그인", use_container_width=True):
-            if login(login_id, login_pw):
-                st.session_state.logged_in = True
-                st.session_state.username = login_id
-                st.query_params["user"] = login_id
-                st.rerun()
-            else:
-                st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+        with st.form(key="login_form"):
+            login_id = st.text_input("아이디 (ID)", key="login_id")
+            login_pw = st.text_input("비밀번호 (Password)", type="password", key="login_pw")
+            submitted = st.form_submit_button("로그인", use_container_width=True)
+            
+            if submitted:
+                if login(login_id, login_pw):
+                    st.session_state.logged_in = True
+                    st.session_state.username = login_id
+                    st.query_params["user"] = login_id
+                    st.rerun()
+                else:
+                    st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
                 
+    # ✨ 회원가입 창도 st.form으로 묶어 엔터키 입력 지원!
     with tab_signup:
-        signup_id = st.text_input("새 아이디 (ID)", key="signup_id")
-        signup_pw = st.text_input("새 비밀번호 (Password)", type="password", key="signup_pw")
-        if st.button("회원가입", use_container_width=True):
-            if signup_id.strip() == "" or signup_pw.strip() == "":
-                st.warning("아이디와 비밀번호를 입력해주세요.")
-            elif signup(signup_id, signup_pw):
-                st.success("회원가입 성공! 이제 로그인 탭에서 로그인해주세요.")
-            else:
-                st.error("이미 존재하는 아이디입니다.")
+        with st.form(key="signup_form"):
+            signup_id = st.text_input("새 아이디 (ID)", key="signup_id")
+            signup_pw = st.text_input("새 비밀번호 (Password)", type="password", key="signup_pw")
+            submitted = st.form_submit_button("회원가입", use_container_width=True)
+            
+            if submitted:
+                if signup_id.strip() == "" or signup_pw.strip() == "":
+                    st.warning("아이디와 비밀번호를 입력해주세요.")
+                elif signup(signup_id, signup_pw):
+                    st.success("회원가입 성공! 이제 로그인 탭에서 로그인해주세요.")
+                else:
+                    st.error("이미 존재하는 아이디입니다.")
 
 else:
     with st.sidebar:
@@ -258,11 +265,9 @@ else:
         st.markdown("### 🔑 Google AI Studio 설정")
         st.markdown("구글에서 [무료 API 키 발급받기](https://aistudio.google.com/app/apikey)")
         
-        # ✨ DB에서 이전 API 키 자동 불러오기
         saved_api_key = get_api_key(st.session_state.username)
         api_key = st.text_input("Gemini API Key를 입력하세요", type="password", value=saved_api_key)
         
-        # 입력된 API 키가 기존 저장된 키와 다르면 즉시 DB 갱신
         if api_key and api_key != saved_api_key:
             save_api_key(st.session_state.username, api_key)
         
@@ -276,7 +281,7 @@ else:
             if available_models:
                 st.markdown("---")
                 st.markdown("### ⚙️ 최적 분석 모델 선택")
-                st.caption("요청하신 핵심 모델(3.6, 3.5, 3.1)만 깔끔하게 보여드립니다.")
+                st.caption("사용 가능한 최적의 모델 목록입니다.")
                 
                 default_idx = 0
                 for i, m in enumerate(available_models):
@@ -368,7 +373,7 @@ else:
                     st.markdown(f"#### 📌 {p['title']}")
                     st.caption(f"🆔 arXiv:{p['id']} | 💾 저장일시: {p['saved_at']}")
                     
-                    with st.expander("📖 한국어 초록 요약 보기"):
+                    with st.expander("📖 간단 요약 보기"):
                         st.write(p.get('summary', '초록 정보가 없습니다.'))
                         
                     with st.expander("🧠 맞춤형 AI 심층 분석 결과"):
@@ -382,3 +387,4 @@ else:
                             delete_paper_from_db(st.session_state.username, p['id'])
                             st.rerun() 
                 st.markdown("---")
+            
