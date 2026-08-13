@@ -19,7 +19,11 @@ def load_json(filepath):
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
             try:
-                return json.load(f)
+                data = json.load(f)
+                # 🎯 에러 해결 1: 구버전 리스트 형태의 DB 파일이 남아있으면 새로 초기화
+                if isinstance(data, list):
+                    return {}
+                return data
             except json.JSONDecodeError:
                 return {}
     return {}
@@ -146,7 +150,8 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
         
-        model = genai.GenerativeModel("gemini-1.5-pro")
+        # 🎯 에러 해결 2: AI 스튜디오 무료 키에 완벽 호환되는 모델명으로 변경
+        model = genai.GenerativeModel("gemini-1.5-pro-latest")
         
         context_prompt = f"\n\n[사용자의 현재 연구 상황 및 특별 요구사항]:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
         prompt = """
@@ -285,5 +290,5 @@ else:
                     with col2:
                         if st.button("🗑️ 삭제하기", key=f"del_{p['id']}", type="secondary", use_container_width=True):
                             delete_paper_from_db(st.session_state.username, p['id'])
-                            st.rerun() # 삭제 후 즉시 화면 새로고침
+                            st.rerun() 
                 st.markdown("---")
