@@ -32,7 +32,6 @@ def save_to_db(paper_info):
         return True
     return False
 
-# 🌐 구글 무료 번역 API를 활용한 영->한 자동 번역 함수
 def translate_to_ko(text):
     try:
         url = "https://translate.googleapis.com/translate_a/single"
@@ -83,17 +82,16 @@ def search_arxiv_papers(user_query, max_results=4):
             title = entry.find('{http://www.w3.org/2005/Atom}title').text.replace('\n', ' ').strip()
             summary = entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip()
             
-            # ✨ 제목과 초록을 실시간으로 한국어로 번역합니다!
             ko_title = translate_to_ko(title)
             ko_summary = translate_to_ko(summary)
             
             papers.append({
                 "id": entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1],
-                "title": ko_title,          # 번역된 제목 화면 표시
-                "en_title": title,          # 원본 제목 (참고용)
+                "title": ko_title,
+                "en_title": title,
                 "authors": ", ".join([a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')][:3]),
                 "published": entry.find('{http://www.w3.org/2005/Atom}published').text[:10],
-                "summary": ko_summary,      # 번역된 초록 화면 표시
+                "summary": ko_summary,
                 "pdf_url": f"https://arxiv.org/pdf/{entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]}.pdf"
             })
         return papers
@@ -114,7 +112,6 @@ with tab1:
         submit_button = st.form_submit_button("🚀 AI 스마트 검색", use_container_width=True)
 
     if submit_button and search_input:
-        # 번역 때문에 시간이 살짝 더 걸리므로 안내 멘트 추가
         with st.spinner("최상위 관련 논문을 찾고, 한국어로 번역하고 있습니다... (약 2~3초 소요)"):
             st.session_state.search_results = search_arxiv_papers(search_input)
 
@@ -128,7 +125,9 @@ with tab1:
                 
                 c1, c2, c3 = st.columns([2, 3, 2])
                 with c1: st.link_button("📄 영문 원본 보기", paper['pdf_url'], use_container_width=True)
-                with c2: btn_analyze = st.button("👁️ 맞춤형 심층 분석 실행", key=f"ana_{paper['id']}", use_container_width=True)
+                
+                # ✨ 눈알 이모티콘(👁️)을 AI 두뇌(🧠)로 변경했습니다!
+                with c2: btn_analyze = st.button("🧠 맞춤형 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
                 with c3: btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
                 
                 if btn_save:
@@ -141,7 +140,7 @@ with tab1:
                             payload = {"pdf_url": paper['pdf_url'], "custom_context": custom_context}
                             response = requests.post(CLOUD_RUN_URL, json=payload, timeout=120)
                             if response.status_code == 200:
-                                st.success("✅ V5.0 맞춤형 심층 분석 완료!")
+                                st.success("✨ V5.0 맞춤형 심층 분석 완료!")
                                 st.markdown(response.json().get("extracted_text", ""))
                             else:
                                 st.error(f"백엔드 에러: {response.text}")
