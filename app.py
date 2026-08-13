@@ -161,13 +161,22 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
         
-        context_prompt = f"\n\n[사용자의 현재 연구 상황 및 특별 요구사항]:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
+        context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
+        
+        # ✨ 프롬프트를 개선하여 AI가 더 가시적이고 예쁘게 답변을 작성하도록 유도
         prompt = """
         당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
-        첨부된 PDF 논문을 바탕으로 다음 3가지를 마크다운으로 완벽히 정리해 주십시오:
-        1. **공식 코드(GitHub) 주소**: 논문 내 오픈소스 링크 발췌.
-        2. **수식 및 표 추출**: 핵심 수식을 LaTeX 표기법($...$)으로 발췌하고, 변수를 표로 분해하여 설명.
-        3. **그래프 시각적 분석**: 주요 아키텍처나 그래프 추세 설명.
+        첨부된 PDF 논문을 바탕으로 다음 3가지를 가시성이 뛰어나고 깔끔한 마크다운 형식으로 정리해 주십시오:
+
+        ### 🔗 1. 공식 코드(GitHub) 주소
+        - 논문 내 오픈소스 링크를 발췌해주세요. (없을 경우 '제공되지 않음' 표기)
+
+        ### 🧮 2. 핵심 수식 및 변수 분석
+        - 논문의 핵심 수식을 LaTeX 표기법($...$)으로 깔끔하게 발췌해주세요.
+        - 수식 내에 사용된 주요 변수들을 표(Table) 형태로 정리하여 의미를 설명해주세요.
+
+        ### 📊 3. 주요 아키텍처 및 시각적 인사이트
+        - 논문 내 주요 아키텍처나 핵심 그래프의 추세를 설명하고, 거기서 얻을 수 있는 핵심 인사이트를 요약해주세요.
         """ + context_prompt
 
         model = genai.GenerativeModel(model_name)
@@ -237,9 +246,8 @@ else:
             if available_models:
                 st.markdown("---")
                 st.markdown("### ⚙️ 최적 분석 모델 선택")
-                st.caption("고객님의 API 키로 **100% 작동 보장**되는 모델들입니다.")
+                st.caption("고객님의 API 키로 작동 보장되는 모델들입니다.")
                 
-                # 가장 무난하고 빠른 flash 모델을 찾아 기본값으로 추천
                 default_idx = 0
                 for i, m in enumerate(available_models):
                     if "flash" in m and "lite" not in m:
@@ -295,14 +303,18 @@ else:
                         elif not selected_model:
                             st.error("⚠️ 에러: API 키가 유효하지 않아 모델을 불러오지 못했습니다.")
                         else:
-                            with st.spinner(f"⚡ 100% 작동 보장! [{selected_model}] 모델로 초고속 정밀 분석 중입니다..."):
+                            with st.spinner(f"⚡ [{selected_model}] 모델로 초고속 정밀 분석 중입니다..."):
                                 result_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
                                     st.info("💡 팁: 드문 경우 PDF가 너무 커서 에러가 날 수 있습니다. 좌측에서 다른 모델을 선택해 시도해보세요!")
                                 else:
                                     st.success(f"✨ [{selected_model}] 심층 분석 완료! (우측 '내 DB에 저장' 시 분석 내용도 영구 저장됩니다)")
-                                    st.markdown(result_text)
+                                    
+                                    # ✨ 분석 결과를 깔끔하게 접었다 폈다 할 수 있도록 Expander 적용!
+                                    with st.expander("🧠 AI 심층 분석 리포트 (클릭하여 열고 닫기)", expanded=True):
+                                        st.markdown(result_text)
+                                        
                                     st.session_state[f"result_{paper['id']}"] = result_text
 
                     if btn_save:
@@ -330,6 +342,7 @@ else:
                     with st.expander("📖 한국어 초록 요약 보기"):
                         st.write(p.get('summary', '초록 정보가 없습니다.'))
                         
+                    # ✨ 내 DB에서도 분석 결과를 아코디언(Expander)으로 깔끔하게 관리!
                     with st.expander("🧠 맞춤형 AI 심층 분석 결과"):
                         st.markdown(p.get('analysis_result', '이 논문은 심층 분석 없이 저장되었습니다.'))
                     
