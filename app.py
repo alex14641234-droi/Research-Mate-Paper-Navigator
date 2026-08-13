@@ -29,20 +29,17 @@ def get_available_models(api_key):
 @st.cache_resource
 def init_firebase():
     if not firebase_admin._apps:
-        # 1. Streamlit Cloud 배포 환경 (st.secrets 사용)
         if "firebase" in st.secrets:
             cert_dict = dict(st.secrets["firebase"])
-            # Streamlit secrets의 이스케이프 문자 처리 보정
             if "private_key" in cert_dict:
                 cert_dict["private_key"] = cert_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(cert_dict)
             firebase_admin.initialize_app(cred)
-        # 2. 로컬 테스트 환경 (로컬 JSON 키 파일 사용 - 파일명: firebase_key.json)
         elif os.path.exists("firebase_key.json"):
             cred = credentials.Certificate("firebase_key.json")
             firebase_admin.initialize_app(cred)
         else:
-            return None # 인증 정보 없음
+            return None
     try:
         return firestore.client()
     except Exception:
@@ -59,7 +56,6 @@ def signup(username, password):
     doc_ref = db.collection('users').document(username)
     if doc_ref.get().exists:
         return False
-    # 사용자 계정 생성 (비밀번호 저장)
     doc_ref.set({'password': hash_password(password), 'api_key': ""})
     return True
 
@@ -85,7 +81,6 @@ def get_api_key(username):
 def save_paper_to_db(username, paper_info):
     if not db: return False
     paper_info['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    # papers 서브컬렉션에 개별 논문 저장
     db.collection('users').document(username).collection('papers').document(paper_info['id']).set(paper_info)
     return True
 
@@ -276,7 +271,7 @@ else:
         
         selected_model = None
         if api_key:
-            st.success("API 키 영구 보존 모드 활성화! 🚀")
+            # ✨ (수정됨) 알림창이 뜨던 곳을 지웠습니다!
             
             with st.spinner("사용 가능한 AI 모델 목록을 불러오는 중..."):
                 available_models = get_available_models(api_key)
