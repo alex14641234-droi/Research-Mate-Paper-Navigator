@@ -143,8 +143,8 @@ def search_arxiv_papers(user_query, max_results=4):
     except Exception as e:
         return []
 
-# --- 🤖 가장 빠른 AI 탐색 로직 (로딩 시간 단축) ---
-def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
+# --- 🤖 초고속 다이렉트 AI 호출 로직 ---
+def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
         
@@ -161,24 +161,7 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         3. **그래프 시각적 분석**: 주요 아키텍처나 그래프 추세 설명.
         """ + context_prompt
 
-        # ⚡ 빠른 속도를 위해 사용 가능한 모델 리스트를 즉시 스캔하여 
-        # 연산 속도가 가장 빠른 'flash' 모델을 최우선으로 다이렉트 연결
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        target_model = None
-        for m in available_models:
-            if 'flash' in m:
-                target_model = m
-                break
-                
-        if not target_model and available_models:
-            target_model = available_models[-1]
-            
-        if not target_model:
-            return "에러 발생: 해당 API 키로 사용할 수 있는 모델이 없습니다."
-            
-        clean_model_name = target_model.replace("models/", "")
-        model = genai.GenerativeModel(clean_model_name)
+        model = genai.GenerativeModel(model_name)
         
         res = model.generate_content([
             {"mime_type": "application/pdf", "data": response.content},
@@ -236,6 +219,15 @@ else:
         api_key = st.text_input("Gemini API Key를 입력하세요", type="password")
         if api_key:
             st.success("API 키 입력 완료! (분석 기능 활성화 됨)")
+            
+        st.markdown("---")
+        st.markdown("### ⚙️ 분석 모델 선택")
+        st.caption("발급받으신 API 키 권한에 따라 사용 가능한 모델이 다를 수 있습니다. 만약 에러가 발생하면 여기서 다른 모델을 선택하고 다시 분석 버튼을 눌러주세요!")
+        selected_model = st.selectbox(
+            "AI 모델",
+            options=["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-pro"],
+            index=0
+        )
 
     st.title("🔬 Research Mate")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
@@ -276,12 +268,13 @@ else:
                         if not api_key:
                             st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
                         else:
-                            with st.spinner(f"⚡ 빠른 속도로 논문을 정밀 분석 중입니다..."):
-                                result_text = analyze_paper_with_gemini(api_key, paper['pdf_url'], custom_context)
+                            with st.spinner(f"⚡ 선택하신 [{selected_model}] 모델로 초고속 정밀 분석 중입니다..."):
+                                result_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
+                                    st.info("💡 팁: 좌측 사이드바에서 '분석 모델'을 다른 것으로 변경한 후 다시 시도해보세요!")
                                 else:
-                                    st.success("✨ 맞춤형 심층 분석 완료! (우측 '내 DB에 저장' 시 분석 내용도 영구 저장됩니다)")
+                                    st.success(f"✨ [{selected_model}] 심층 분석 완료! (우측 '내 DB에 저장' 시 분석 내용도 영구 저장됩니다)")
                                     st.markdown(result_text)
                                     st.session_state[f"result_{paper['id']}"] = result_text
 
@@ -321,3 +314,4 @@ else:
                             delete_paper_from_db(st.session_state.username, p['id'])
                             st.rerun() 
                 st.markdown("---")
+            
