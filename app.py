@@ -3,11 +3,13 @@ import requests
 import xml.etree.ElementTree as ET
 import re
 import urllib.parse
-import json
-import os
 from datetime import datetime
 import hashlib
 import google.generativeai as genai
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
+import os
 
 st.set_page_config(page_title="Research Mate", page_icon="🔬", layout="wide")
 
@@ -18,84 +20,84 @@ def get_available_models(api_key):
         genai.configure(api_key=api_key)
         all_models = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # 고객님이 요청하신 핵심 모델 버전만 필터링!
         filtered = [m for m in all_models if "3.6" in m or "3.5" in m or "3.1-pro" in m]
-        
         return filtered if filtered else all_models
     except Exception:
         return []
 
-USERS_DB_FILE = "users_db.json"
-PAPERS_DB_FILE = "my_lab_db.json"
-API_KEYS_DB_FILE = "api_keys_db.json"
+# --- ☁️ 클라우드 데이터베이스 (Firebase Firestore) 초기화 ---
+@st.cache_resource
+def init_firebase():
+    if not firebase_admin._apps:
+        # 1. Streamlit Cloud 배포 환경 (st.secrets 사용)
+        if "firebase" in st.secrets:
+            cert_dict = dict(st.secrets["firebase"])
+            # Streamlit secrets의 이스케이프 문자 처리 보정
+            if "private_key" in cert_dict:
+                cert_dict["private_key"] = cert_dict["private_key"].replace("\\n", "\n")
+            cred = credentials.Certificate(cert_dict)
+            firebase_admin.initialize_app(cred)
+        # 2. 로컬 테스트 환경 (로컬 JSON 키 파일 사용 - 파일명: firebase_key.json)
+        elif os.path.exists("firebase_key.json"):
+            cred = credentials.Certificate("firebase_key.json")
+            firebase_admin.initialize_app(cred)
+        else:
+            return None # 인증 정보 없음
+    try:
+        return firestore.client()
+    except Exception:
+        return None
 
-# --- 💾 데이터베이스 & 인증 로직 ---
-def load_json(filepath):
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return {}
-                return data
-            except json.JSONDecodeError:
-                return {}
-    return {}
+db = init_firebase()
 
-def save_json(filepath, data):
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
+# --- 💾 클라우드 데이터베이스 연동 로직 ---
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def signup(username, password):
-    users = load_json(USERS_DB_FILE)
-    if username in users:
+    if not db: return False
+    doc_ref = db.collection('users').document(username)
+    if doc_ref.get().exists:
         return False
-    users[username] = hash_password(password)
-    save_json(USERS_DB_FILE, users)
+    # 사용자 계정 생성 (비밀번호 저장)
+    doc_ref.set({'password': hash_password(password), 'api_key': ""})
     return True
 
 def login(username, password):
-    users = load_json(USERS_DB_FILE)
-    if username in users and users[username] == hash_password(password):
+    if not db: return False
+    doc_ref = db.collection('users').document(username)
+    doc = doc_ref.get()
+    if doc.exists and doc.to_dict().get('password') == hash_password(password):
         return True
     return False
 
-# ✨ API 키 자동 저장 및 불러오기 로직
 def save_api_key(username, api_key):
-    db = load_json(API_KEYS_DB_FILE)
-    db[username] = api_key
-    save_json(API_KEYS_DB_FILE, db)
+    if not db: return
+    db.collection('users').document(username).update({'api_key': api_key})
 
 def get_api_key(username):
-    db = load_json(API_KEYS_DB_FILE)
-    return db.get(username, "")
+    if not db: return ""
+    doc = db.collection('users').document(username).get()
+    if doc.exists:
+        return doc.to_dict().get('api_key', "")
+    return ""
 
 def save_paper_to_db(username, paper_info):
-    db = load_json(PAPERS_DB_FILE)
-    if username not in db:
-        db[username] = []
-    
-    db[username] = [p for p in db[username] if p['id'] != paper_info['id']]
-        
+    if not db: return False
     paper_info['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    db[username].append(paper_info)
-    save_json(PAPERS_DB_FILE, db)
+    # papers 서브컬렉션에 개별 논문 저장
+    db.collection('users').document(username).collection('papers').document(paper_info['id']).set(paper_info)
     return True
 
 def delete_paper_from_db(username, paper_id):
-    db = load_json(PAPERS_DB_FILE)
-    if username in db:
-        db[username] = [p for p in db[username] if p['id'] != paper_id]
-        save_json(PAPERS_DB_FILE, db)
-        return True
-    return False
+    if not db: return False
+    db.collection('users').document(username).collection('papers').document(paper_id).delete()
+    return True
 
 def get_saved_papers(username):
-    db = load_json(PAPERS_DB_FILE)
-    return db.get(username, [])
+    if not db: return []
+    papers_ref = db.collection('users').document(username).collection('papers').order_by('saved_at', direction=firestore.Query.DESCENDING)
+    return [doc.to_dict() for doc in papers_ref.stream()]
 
 # --- 🌐 번역 및 ArXiv 탐색 로직 ---
 def translate_to_ko(text):
@@ -218,38 +220,39 @@ if not st.session_state.logged_in:
     st.title("🔐 Research Mate 로그인")
     st.caption("나만의 논문 DB와 AI 분석을 위해 로그인하거나 회원가입하세요.")
     
-    tab_login, tab_signup = st.tabs(["🔑 로그인", "📝 회원가입"])
-    
-    # ✨ 로그인 창을 st.form으로 묶어 엔터키 입력 지원!
-    with tab_login:
-        with st.form(key="login_form"):
-            login_id = st.text_input("아이디 (ID)", key="login_id")
-            login_pw = st.text_input("비밀번호 (Password)", type="password", key="login_pw")
-            submitted = st.form_submit_button("로그인", use_container_width=True)
-            
-            if submitted:
-                if login(login_id, login_pw):
-                    st.session_state.logged_in = True
-                    st.session_state.username = login_id
-                    st.query_params["user"] = login_id
-                    st.rerun()
-                else:
-                    st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+    if not db:
+        st.error("🚨 서버 오류: 데이터베이스(Firebase) 연결에 실패했습니다. 관리자 가이드를 참고하여 설정해주세요.")
+    else:
+        tab_login, tab_signup = st.tabs(["🔑 로그인", "📝 회원가입"])
+        
+        with tab_login:
+            with st.form(key="login_form"):
+                login_id = st.text_input("아이디 (ID)", key="login_id")
+                login_pw = st.text_input("비밀번호 (Password)", type="password", key="login_pw")
+                submitted = st.form_submit_button("로그인", use_container_width=True)
                 
-    # ✨ 회원가입 창도 st.form으로 묶어 엔터키 입력 지원!
-    with tab_signup:
-        with st.form(key="signup_form"):
-            signup_id = st.text_input("새 아이디 (ID)", key="signup_id")
-            signup_pw = st.text_input("새 비밀번호 (Password)", type="password", key="signup_pw")
-            submitted = st.form_submit_button("회원가입", use_container_width=True)
-            
-            if submitted:
-                if signup_id.strip() == "" or signup_pw.strip() == "":
-                    st.warning("아이디와 비밀번호를 입력해주세요.")
-                elif signup(signup_id, signup_pw):
-                    st.success("회원가입 성공! 이제 로그인 탭에서 로그인해주세요.")
-                else:
-                    st.error("이미 존재하는 아이디입니다.")
+                if submitted:
+                    if login(login_id, login_pw):
+                        st.session_state.logged_in = True
+                        st.session_state.username = login_id
+                        st.query_params["user"] = login_id
+                        st.rerun()
+                    else:
+                        st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+                    
+        with tab_signup:
+            with st.form(key="signup_form"):
+                signup_id = st.text_input("새 아이디 (ID)", key="signup_id")
+                signup_pw = st.text_input("새 비밀번호 (Password)", type="password", key="signup_pw")
+                submitted = st.form_submit_button("회원가입", use_container_width=True)
+                
+                if submitted:
+                    if signup_id.strip() == "" or signup_pw.strip() == "":
+                        st.warning("아이디와 비밀번호를 입력해주세요.")
+                    elif signup(signup_id, signup_pw):
+                        st.success("회원가입 성공! 이제 로그인 탭에서 로그인해주세요.")
+                    else:
+                        st.error("이미 존재하는 아이디입니다.")
 
 else:
     with st.sidebar:
@@ -387,4 +390,3 @@ else:
                             delete_paper_from_db(st.session_state.username, p['id'])
                             st.rerun() 
                 st.markdown("---")
-            
