@@ -1,4 +1,4 @@
 streamlit
-google-generativeai
 requests
-arxiv
+google-generativeai
+firebase-admin
