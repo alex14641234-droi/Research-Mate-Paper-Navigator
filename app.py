@@ -9,7 +9,7 @@ from datetime import datetime
 import hashlib
 import google.generativeai as genai
 
-st.set_page_config(page_title="Research Mate V10.0", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Research Mate V11.0", page_icon="🧠", layout="wide")
 
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
@@ -127,20 +127,24 @@ def search_arxiv_papers(user_query, max_results=4):
             ko_title = translate_to_ko(title)
             ko_summary = translate_to_ko(summary)
             
+            # ✨ 버전 정보(v1, v2 등)를 제거하여 깔끔한 ID만 추출
+            raw_id = entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]
+            clean_id = re.sub(r'v\d+$', '', raw_id)
+            
             papers.append({
-                "id": entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1],
+                "id": clean_id,
                 "title": ko_title,
                 "en_title": title,
                 "authors": ", ".join([a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')][:3]),
                 "published": entry.find('{http://www.w3.org/2005/Atom}published').text[:10],
                 "summary": ko_summary,
-                "pdf_url": f"https://arxiv.org/pdf/{entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]}.pdf"
+                "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
         return papers
     except Exception as e:
         return []
 
-# --- 🤖 [불사조 로직] 가장 안정적인 모델 순차적 자동 스캔 ---
+# --- 🤖 [최신 불사조 로직] 1.5 단종에 대비한 3.x / 2.x 환승 시스템 ---
 def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
@@ -158,12 +162,14 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         3. **그래프 시각적 분석**: 주요 아키텍처나 그래프 추세 설명.
         """ + context_prompt
 
-        # 🎯 400, 404, 429 에러 방어: 에러가 나면 다음 튼튼한 모델로 자동 환승
+        # 🎯 모델 단종 대응: 단종된 1.5를 버리고 가장 빠르고 최신인 3.x와 2.x 라인업으로 스캔
         safe_models = [
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-pro",
-            "gemini-1.5-pro-latest"
+            "gemini-3.5-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-pro"
         ]
         
         last_error = ""
@@ -179,7 +185,7 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
                 last_error = str(e)
                 continue # 실패 시 다음 모델 시도
                 
-        return f"에러 발생: 모든 모델 호출에 실패했습니다. (사유: {last_error})"
+        return f"에러 발생: 모든 최신 모델 호출에 실패했습니다. (사유: {last_error})"
     except Exception as e:
         return f"에러 발생: PDF를 읽어오는 중 문제가 생겼습니다. {str(e)}"
 
@@ -231,7 +237,7 @@ else:
         if api_key:
             st.success("API 키 입력 완료! (분석 기능 활성화 됨)")
 
-    st.title("🧠 Research Mate V10.0")
+    st.title("🧠 Research Mate V11.0")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
@@ -256,6 +262,7 @@ else:
             st.markdown("### 📄 발견된 최상위 논문 (한국어 자동 번역 🇰🇷)")
             for idx, paper in enumerate(st.session_state.search_results):
                 with st.expander(f"[{idx+1}] {paper['title']} (클릭하여 열기)", expanded=True):
+                    # ✨ 화면 표시 텍스트에서 버전 지저분한 문자 제거 완료!
                     st.caption(f"✍️ 저자: {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
                     st.markdown(f"**원제(English)**: *{paper['en_title']}*")
                     st.write(f"**초록 요약**: {paper['summary'][:350]}...")
@@ -270,19 +277,17 @@ else:
                         if not api_key:
                             st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
                         else:
-                            with st.spinner(f"⚡ 구글 서버 상태를 체크하며 가장 튼튼한 AI 모델로 논문을 분석 중입니다..."):
+                            with st.spinner(f"⚡ 구글 최신 서버를 스캔하여 멈추지 않는 AI 모델로 분석 중입니다..."):
                                 result_text = analyze_paper_with_gemini(api_key, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
                                 else:
-                                    st.success("✨ 맞춤형 심층 분석 완료! (이제 우측 '내 DB에 저장' 버튼을 누르면 이 분석 내용도 함께 영구 저장됩니다)")
+                                    st.success("✨ 맞춤형 심층 분석 완료! (우측 '내 DB에 저장' 시 분석 내용도 영구 저장됩니다)")
                                     st.markdown(result_text)
-                                    # 분석 결과를 세션에 잠시 저장해둠 (DB 저장 시 끌어다 쓰기 위함)
                                     st.session_state[f"result_{paper['id']}"] = result_text
 
                     if btn_save:
                         paper_to_save = paper.copy()
-                        # 분석한 이력이 있다면 분석 내용도 함께 DB에 저장!
                         if f"result_{paper['id']}" in st.session_state:
                             paper_to_save['analysis_result'] = st.session_state[f"result_{paper['id']}"]
                         else:
@@ -303,11 +308,9 @@ else:
                     st.markdown(f"#### 📌 {p['title']}")
                     st.caption(f"🆔 arXiv:{p['id']} | 💾 저장일시: {p['saved_at']}")
                     
-                    # ✨ 1. 한국어 초록 요약 보기 기능 추가
                     with st.expander("📖 한국어 초록 요약 보기"):
                         st.write(p.get('summary', '초록 정보가 없습니다.'))
                         
-                    # ✨ 2. 심층 분석 결과 통째로 보기 기능 추가
                     with st.expander("🧠 맞춤형 AI 심층 분석 결과"):
                         st.markdown(p.get('analysis_result', '이 논문은 심층 분석 없이 저장되었습니다.'))
                     
