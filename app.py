@@ -16,7 +16,6 @@ st.set_page_config(page_title="Research Mate", page_icon="🔬", layout="wide")
 def get_available_models(api_key):
     try:
         genai.configure(api_key=api_key)
-        # 'models/' 글자를 떼어내고, 텍스트 분석(generateContent)이 가능한 진짜 모델만 추출
         return [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     except Exception:
         return []
@@ -163,7 +162,6 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
         
         context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
         
-        # ✨ 프롬프트를 개선하여 AI가 더 가시적이고 예쁘게 답변을 작성하도록 유도
         prompt = """
         당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
         첨부된 PDF 논문을 바탕으로 다음 3가지를 가시성이 뛰어나고 깔끔한 마크다운 형식으로 정리해 주십시오:
@@ -191,9 +189,15 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
         return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
 
 # --- 💻 메인 앱 & UI ---
+
+# ✨ 새로고침 시 자동 로그아웃 방지 로직 (URL 쿼리 파라미터 활용)
 if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.username = ""
+    if "user" in st.query_params:
+        st.session_state.logged_in = True
+        st.session_state.username = st.query_params["user"]
+    else:
+        st.session_state.logged_in = False
+        st.session_state.username = ""
 
 if not st.session_state.logged_in:
     st.title("🔐 Research Mate 로그인")
@@ -208,6 +212,8 @@ if not st.session_state.logged_in:
             if login(login_id, login_pw):
                 st.session_state.logged_in = True
                 st.session_state.username = login_id
+                # ✨ 로그인 성공 시 URL에 아이디를 박아두어 새로고침 방어
+                st.query_params["user"] = login_id
                 st.rerun()
             else:
                 st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
@@ -229,6 +235,9 @@ else:
         if st.button("로그아웃"):
             st.session_state.logged_in = False
             st.session_state.username = ""
+            # ✨ 명시적 로그아웃 시 URL에서 아이디 정보 완전 삭제
+            if "user" in st.query_params:
+                del st.query_params["user"]
             st.rerun()
             
         st.markdown("---")
@@ -311,7 +320,6 @@ else:
                                 else:
                                     st.success(f"✨ [{selected_model}] 심층 분석 완료! (우측 '내 DB에 저장' 시 분석 내용도 영구 저장됩니다)")
                                     
-                                    # ✨ 분석 결과를 깔끔하게 접었다 폈다 할 수 있도록 Expander 적용!
                                     with st.expander("🧠 AI 심층 분석 리포트 (클릭하여 열고 닫기)", expanded=True):
                                         st.markdown(result_text)
                                         
@@ -342,7 +350,6 @@ else:
                     with st.expander("📖 한국어 초록 요약 보기"):
                         st.write(p.get('summary', '초록 정보가 없습니다.'))
                         
-                    # ✨ 내 DB에서도 분석 결과를 아코디언(Expander)으로 깔끔하게 관리!
                     with st.expander("🧠 맞춤형 AI 심층 분석 결과"):
                         st.markdown(p.get('analysis_result', '이 논문은 심층 분석 없이 저장되었습니다.'))
                     
