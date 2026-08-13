@@ -9,7 +9,7 @@ from datetime import datetime
 import hashlib
 import google.generativeai as genai
 
-st.set_page_config(page_title="Research Mate V6.0", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Research Mate V7.0", page_icon="🧠", layout="wide")
 
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
@@ -20,7 +20,6 @@ def load_json(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
             try:
                 data = json.load(f)
-                # 🎯 에러 해결 1: 구버전 리스트 형태의 DB 파일이 남아있으면 새로 초기화
                 if isinstance(data, list):
                     return {}
                 return data
@@ -141,7 +140,7 @@ def search_arxiv_papers(user_query, max_results=4):
     except Exception as e:
         return []
 
-# --- 🤖 에러 없는 All-in-one 로컬 AI 호출 로직 ---
+# --- 🤖 스마트 AI 호출 로직 (에러 완벽 방어) ---
 def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
@@ -150,8 +149,26 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
         
-        # 🎯 에러 해결 2: AI 스튜디오 무료 키에 완벽 호환되는 모델명으로 변경
-        model = genai.GenerativeModel("gemini-1.5-pro-latest")
+        # 🎯 404 에러 영구 해결: 사용자 API 키에서 사용 가능한 모든 모델 목록을 스캔
+        valid_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        target_model = "gemini-2.5-pro" # 최신 기본값
+        
+        # 가장 똑똑한 Pro 모델 최우선 선택, 없으면 Flash 모델 선택
+        pro_models = [m for m in valid_models if 'pro' in m]
+        flash_models = [m for m in valid_models if 'flash' in m]
+        
+        if pro_models:
+            target_model = sorted(pro_models, reverse=True)[0]
+        elif flash_models:
+            target_model = sorted(flash_models, reverse=True)[0]
+        elif valid_models:
+            target_model = valid_models[-1]
+            
+        # 모델 이름 다듬기 (models/gemini-2.5-pro -> gemini-2.5-pro)
+        clean_model_name = target_model.replace("models/", "")
+        
+        model = genai.GenerativeModel(clean_model_name)
         
         context_prompt = f"\n\n[사용자의 현재 연구 상황 및 특별 요구사항]:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
         prompt = """
@@ -162,12 +179,12 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         3. **그래프 시각적 분석**: 주요 아키텍처나 그래프 추세 설명.
         """ + context_prompt
 
-        response = model.generate_content([
+        res = model.generate_content([
             {"mime_type": "application/pdf", "data": response.content},
             prompt
         ], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
         
-        return response.text
+        return res.text
     except Exception as e:
         return f"에러 발생: {str(e)}"
 
@@ -219,7 +236,7 @@ else:
         if api_key:
             st.success("API 키 입력 완료! (분석 기능 활성화 됨)")
 
-    st.title("🧠 Research Mate V6.0")
+    st.title("🧠 Research Mate V7.0")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
@@ -264,7 +281,7 @@ else:
                         if not api_key:
                             st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
                         else:
-                            with st.spinner(f"⚡ 요구사항을 반영하여 논문을 정밀 분석 중입니다... (최대 30초 소요)"):
+                            with st.spinner(f"⚡ 404 에러 원천 차단! 최적의 AI 모델을 찾아 논문을 정밀 분석 중입니다..."):
                                 result_text = analyze_paper_with_gemini(api_key, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
