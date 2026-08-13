@@ -9,7 +9,7 @@ from datetime import datetime
 import hashlib
 import google.generativeai as genai
 
-st.set_page_config(page_title="Research Mate V11.0", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Research Mate", page_icon="🔬", layout="wide")
 
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
@@ -127,7 +127,6 @@ def search_arxiv_papers(user_query, max_results=4):
             ko_title = translate_to_ko(title)
             ko_summary = translate_to_ko(summary)
             
-            # ✨ 버전 정보(v1, v2 등)를 제거하여 깔끔한 ID만 추출
             raw_id = entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]
             clean_id = re.sub(r'v\d+$', '', raw_id)
             
@@ -144,7 +143,7 @@ def search_arxiv_papers(user_query, max_results=4):
     except Exception as e:
         return []
 
-# --- 🤖 [최신 불사조 로직] 1.5 단종에 대비한 3.x / 2.x 환승 시스템 ---
+# --- 🤖 가장 빠른 AI 탐색 로직 (로딩 시간 단축) ---
 def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
@@ -162,32 +161,33 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         3. **그래프 시각적 분석**: 주요 아키텍처나 그래프 추세 설명.
         """ + context_prompt
 
-        # 🎯 모델 단종 대응: 단종된 1.5를 버리고 가장 빠르고 최신인 3.x와 2.x 라인업으로 스캔
-        safe_models = [
-            "gemini-3.5-flash",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-            "gemini-pro"
-        ]
+        # ⚡ 빠른 속도를 위해 사용 가능한 모델 리스트를 즉시 스캔하여 
+        # 연산 속도가 가장 빠른 'flash' 모델을 최우선으로 다이렉트 연결
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        last_error = ""
-        for model_name in safe_models:
-            try:
-                model = genai.GenerativeModel(model_name)
-                res = model.generate_content([
-                    {"mime_type": "application/pdf", "data": response.content},
-                    prompt
-                ], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
-                return res.text
-            except Exception as e:
-                last_error = str(e)
-                continue # 실패 시 다음 모델 시도
+        target_model = None
+        for m in available_models:
+            if 'flash' in m:
+                target_model = m
+                break
                 
-        return f"에러 발생: 모든 최신 모델 호출에 실패했습니다. (사유: {last_error})"
+        if not target_model and available_models:
+            target_model = available_models[-1]
+            
+        if not target_model:
+            return "에러 발생: 해당 API 키로 사용할 수 있는 모델이 없습니다."
+            
+        clean_model_name = target_model.replace("models/", "")
+        model = genai.GenerativeModel(clean_model_name)
+        
+        res = model.generate_content([
+            {"mime_type": "application/pdf", "data": response.content},
+            prompt
+        ], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+        return res.text
+
     except Exception as e:
-        return f"에러 발생: PDF를 읽어오는 중 문제가 생겼습니다. {str(e)}"
+        return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
 
 # --- 💻 메인 앱 & UI ---
 if "logged_in" not in st.session_state:
@@ -237,7 +237,7 @@ else:
         if api_key:
             st.success("API 키 입력 완료! (분석 기능 활성화 됨)")
 
-    st.title("🧠 Research Mate V11.0")
+    st.title("🔬 Research Mate")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
@@ -262,7 +262,6 @@ else:
             st.markdown("### 📄 발견된 최상위 논문 (한국어 자동 번역 🇰🇷)")
             for idx, paper in enumerate(st.session_state.search_results):
                 with st.expander(f"[{idx+1}] {paper['title']} (클릭하여 열기)", expanded=True):
-                    # ✨ 화면 표시 텍스트에서 버전 지저분한 문자 제거 완료!
                     st.caption(f"✍️ 저자: {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
                     st.markdown(f"**원제(English)**: *{paper['en_title']}*")
                     st.write(f"**초록 요약**: {paper['summary'][:350]}...")
@@ -277,7 +276,7 @@ else:
                         if not api_key:
                             st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
                         else:
-                            with st.spinner(f"⚡ 구글 최신 서버를 스캔하여 멈추지 않는 AI 모델로 분석 중입니다..."):
+                            with st.spinner(f"⚡ 빠른 속도로 논문을 정밀 분석 중입니다..."):
                                 result_text = analyze_paper_with_gemini(api_key, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
