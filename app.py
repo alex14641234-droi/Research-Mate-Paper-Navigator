@@ -9,7 +9,7 @@ from datetime import datetime
 import hashlib
 import google.generativeai as genai
 
-st.set_page_config(page_title="Research Mate V8.0", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Research Mate V9.0", page_icon="🧠", layout="wide")
 
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
@@ -140,7 +140,7 @@ def search_arxiv_papers(user_query, max_results=4):
     except Exception as e:
         return []
 
-# --- 🤖 에러 원천 차단 AI 호출 로직 ---
+# --- 🤖 찐막 해결! 사용자 API 키 스캐너 탑재 로직 ---
 def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
@@ -149,8 +149,34 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
         
-        # 🎯 429 과금 에러 해결: 무료 할당량이 가장 넉넉하고 100% 안정적인 1.5 Flash 모델로 고정!
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # 1. 내 API 키로 쓸 수 있는 모델 리스트 싹 다 뽑아오기
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        target_model_name = None
+        
+        # 2. 쿼터가 넉넉하고 404가 안 뜨는 "1.5 버전" 중 "flash" 모델부터 찾기!
+        safe_models = [m for m in available_models if 'gemini-1.5' in m]
+        
+        if safe_models:
+            flash_models = [m for m in safe_models if 'flash' in m]
+            if flash_models:
+                target_model_name = flash_models[0]
+            else:
+                target_model_name = safe_models[0]
+        elif available_models:
+            # 1.5가 없다면 사용 가능한 모델 중 아무거나 (단, 쿼터 에러 나는 3.0은 피함)
+            fallback_models = [m for m in available_models if 'gemini-3' not in m]
+            if fallback_models:
+                target_model_name = fallback_models[-1]
+            else:
+                target_model_name = available_models[-1]
+                
+        if not target_model_name:
+            return "에러: 해당 API 키로 사용할 수 있는 모델이 아예 없습니다."
+            
+        # 3. 찾은 완벽한 모델 이름에서 "models/" 글자만 깔끔하게 지우고 호출 (404 완벽 방어)
+        clean_model_name = target_model_name.replace("models/", "")
+        
+        model = genai.GenerativeModel(clean_model_name)
         
         context_prompt = f"\n\n[사용자의 현재 연구 상황 및 특별 요구사항]:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
         prompt = """
@@ -218,7 +244,7 @@ else:
         if api_key:
             st.success("API 키 입력 완료! (분석 기능 활성화 됨)")
 
-    st.title("🧠 Research Mate V8.0")
+    st.title("🧠 Research Mate V9.0")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
@@ -263,7 +289,7 @@ else:
                         if not api_key:
                             st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
                         else:
-                            with st.spinner(f"⚡ 빠르고 안정적인 모델(1.5 Flash)로 논문을 정밀 분석 중입니다..."):
+                            with st.spinner(f"⚡ 구글 서버에서 쿼터가 가장 넉넉한 최적의 모델을 스캔하여 논문을 정밀 분석 중입니다..."):
                                 result_text = analyze_paper_with_gemini(api_key, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
@@ -283,7 +309,7 @@ else:
                     st.markdown(f"#### 📌 {p['title']}")
                     st.caption(f"🆔 arXiv:{p['id']} | 💾 저장일시: {p['saved_at']}")
                     
-                    # ✨ 새롭게 추가된 [초록 요약] 보기 기능
+                    # ✨ 한국어 초록 요약 보기 기능
                     with st.expander("📖 한국어 초록 요약 보기"):
                         st.write(p.get('summary', '초록 정보가 없습니다.'))
                     
