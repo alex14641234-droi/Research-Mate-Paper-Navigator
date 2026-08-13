@@ -9,7 +9,7 @@ from datetime import datetime
 import hashlib
 import google.generativeai as genai
 
-st.set_page_config(page_title="Research Mate V9.0", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Research Mate V10.0", page_icon="🧠", layout="wide")
 
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
@@ -53,8 +53,8 @@ def save_paper_to_db(username, paper_info):
     if username not in db:
         db[username] = []
     
-    if any(p['id'] == paper_info['id'] for p in db[username]):
-        return False
+    # 이미 저장된 논문이면 삭제하고 새 정보(분석 내용 포함)로 업데이트
+    db[username] = [p for p in db[username] if p['id'] != paper_info['id']]
         
     paper_info['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
     db[username].append(paper_info)
@@ -140,7 +140,7 @@ def search_arxiv_papers(user_query, max_results=4):
     except Exception as e:
         return []
 
-# --- 🤖 찐막 해결! 사용자 API 키 스캐너 탑재 로직 ---
+# --- 🤖 [불사조 로직] 가장 안정적인 모델 순차적 자동 스캔 ---
 def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
@@ -148,35 +148,6 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
-        
-        # 1. 내 API 키로 쓸 수 있는 모델 리스트 싹 다 뽑아오기
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target_model_name = None
-        
-        # 2. 쿼터가 넉넉하고 404가 안 뜨는 "1.5 버전" 중 "flash" 모델부터 찾기!
-        safe_models = [m for m in available_models if 'gemini-1.5' in m]
-        
-        if safe_models:
-            flash_models = [m for m in safe_models if 'flash' in m]
-            if flash_models:
-                target_model_name = flash_models[0]
-            else:
-                target_model_name = safe_models[0]
-        elif available_models:
-            # 1.5가 없다면 사용 가능한 모델 중 아무거나 (단, 쿼터 에러 나는 3.0은 피함)
-            fallback_models = [m for m in available_models if 'gemini-3' not in m]
-            if fallback_models:
-                target_model_name = fallback_models[-1]
-            else:
-                target_model_name = available_models[-1]
-                
-        if not target_model_name:
-            return "에러: 해당 API 키로 사용할 수 있는 모델이 아예 없습니다."
-            
-        # 3. 찾은 완벽한 모델 이름에서 "models/" 글자만 깔끔하게 지우고 호출 (404 완벽 방어)
-        clean_model_name = target_model_name.replace("models/", "")
-        
-        model = genai.GenerativeModel(clean_model_name)
         
         context_prompt = f"\n\n[사용자의 현재 연구 상황 및 특별 요구사항]:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
         prompt = """
@@ -187,14 +158,30 @@ def analyze_paper_with_gemini(api_key, pdf_url, custom_context):
         3. **그래프 시각적 분석**: 주요 아키텍처나 그래프 추세 설명.
         """ + context_prompt
 
-        res = model.generate_content([
-            {"mime_type": "application/pdf", "data": response.content},
-            prompt
-        ], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+        # 🎯 400, 404, 429 에러 방어: 에러가 나면 다음 튼튼한 모델로 자동 환승
+        safe_models = [
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-pro",
+            "gemini-1.5-pro-latest"
+        ]
         
-        return res.text
+        last_error = ""
+        for model_name in safe_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                res = model.generate_content([
+                    {"mime_type": "application/pdf", "data": response.content},
+                    prompt
+                ], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+                return res.text
+            except Exception as e:
+                last_error = str(e)
+                continue # 실패 시 다음 모델 시도
+                
+        return f"에러 발생: 모든 모델 호출에 실패했습니다. (사유: {last_error})"
     except Exception as e:
-        return f"에러 발생: {str(e)}"
+        return f"에러 발생: PDF를 읽어오는 중 문제가 생겼습니다. {str(e)}"
 
 # --- 💻 메인 앱 & UI ---
 if "logged_in" not in st.session_state:
@@ -244,7 +231,7 @@ else:
         if api_key:
             st.success("API 키 입력 완료! (분석 기능 활성화 됨)")
 
-    st.title("🧠 Research Mate V9.0")
+    st.title("🧠 Research Mate V10.0")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
@@ -279,23 +266,30 @@ else:
                     with c2: btn_analyze = st.button("🧠 맞춤형 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
                     with c3: btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
                     
-                    if btn_save:
-                        if save_paper_to_db(st.session_state.username, paper): 
-                            st.success("✅ [내 연구 DB]에 저장되었습니다!")
-                        else: 
-                            st.warning("이미 DB에 저장된 논문입니다.")
-
                     if btn_analyze:
                         if not api_key:
                             st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
                         else:
-                            with st.spinner(f"⚡ 구글 서버에서 쿼터가 가장 넉넉한 최적의 모델을 스캔하여 논문을 정밀 분석 중입니다..."):
+                            with st.spinner(f"⚡ 구글 서버 상태를 체크하며 가장 튼튼한 AI 모델로 논문을 분석 중입니다..."):
                                 result_text = analyze_paper_with_gemini(api_key, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
                                 else:
-                                    st.success("✨ 맞춤형 심층 분석 완료!")
+                                    st.success("✨ 맞춤형 심층 분석 완료! (이제 우측 '내 DB에 저장' 버튼을 누르면 이 분석 내용도 함께 영구 저장됩니다)")
                                     st.markdown(result_text)
+                                    # 분석 결과를 세션에 잠시 저장해둠 (DB 저장 시 끌어다 쓰기 위함)
+                                    st.session_state[f"result_{paper['id']}"] = result_text
+
+                    if btn_save:
+                        paper_to_save = paper.copy()
+                        # 분석한 이력이 있다면 분석 내용도 함께 DB에 저장!
+                        if f"result_{paper['id']}" in st.session_state:
+                            paper_to_save['analysis_result'] = st.session_state[f"result_{paper['id']}"]
+                        else:
+                            paper_to_save['analysis_result'] = "심층 분석을 진행하지 않고 저장된 논문입니다. (검색 탭에서 '심층 분석' 후 다시 저장해보세요!)"
+                            
+                        save_paper_to_db(st.session_state.username, paper_to_save)
+                        st.success("✅ [내 연구 DB]에 한국어 요약과 함께 저장되었습니다! (분석 내용이 있다면 함께 저장됨)")
 
     with tab2:
         st.markdown(f"### 🗄️ {st.session_state.username}님의 연구 논문 아카이브")
@@ -309,9 +303,13 @@ else:
                     st.markdown(f"#### 📌 {p['title']}")
                     st.caption(f"🆔 arXiv:{p['id']} | 💾 저장일시: {p['saved_at']}")
                     
-                    # ✨ 한국어 초록 요약 보기 기능
+                    # ✨ 1. 한국어 초록 요약 보기 기능 추가
                     with st.expander("📖 한국어 초록 요약 보기"):
                         st.write(p.get('summary', '초록 정보가 없습니다.'))
+                        
+                    # ✨ 2. 심층 분석 결과 통째로 보기 기능 추가
+                    with st.expander("🧠 맞춤형 AI 심층 분석 결과"):
+                        st.markdown(p.get('analysis_result', '이 논문은 심층 분석 없이 저장되었습니다.'))
                     
                     col1, col2 = st.columns([8, 2])
                     with col1:
