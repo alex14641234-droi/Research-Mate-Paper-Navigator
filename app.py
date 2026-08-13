@@ -32,6 +32,18 @@ def save_to_db(paper_info):
         return True
     return False
 
+# 🌐 구글 무료 번역 API를 활용한 영->한 자동 번역 함수
+def translate_to_ko(text):
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client": "gtx", "sl": "en", "tl": "ko", "dt": "t", "q": text}
+        res = requests.get(url, params=params, timeout=5)
+        data = res.json()
+        translated_text = "".join([sentence[0] for sentence in data[0]])
+        return translated_text
+    except Exception:
+        return text
+
 def parse_smart_query(user_query):
     q = user_query.strip().lower()
     match = re.search(r'\d{4}\.\d{4,5}', q)
@@ -68,16 +80,24 @@ def search_arxiv_papers(user_query, max_results=4):
         root = ET.fromstring(res.text)
         papers = []
         for entry in root.findall('{http://www.w3.org/2005/Atom}entry'):
+            title = entry.find('{http://www.w3.org/2005/Atom}title').text.replace('\n', ' ').strip()
+            summary = entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip()
+            
+            # ✨ 제목과 초록을 실시간으로 한국어로 번역합니다!
+            ko_title = translate_to_ko(title)
+            ko_summary = translate_to_ko(summary)
+            
             papers.append({
                 "id": entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1],
-                "title": entry.find('{http://www.w3.org/2005/Atom}title').text.replace('\n', ' ').strip(),
+                "title": ko_title,          # 번역된 제목 화면 표시
+                "en_title": title,          # 원본 제목 (참고용)
                 "authors": ", ".join([a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')][:3]),
                 "published": entry.find('{http://www.w3.org/2005/Atom}published').text[:10],
-                "summary": entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip(),
+                "summary": ko_summary,      # 번역된 초록 화면 표시
                 "pdf_url": f"https://arxiv.org/pdf/{entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]}.pdf"
             })
         return papers
-    except:
+    except Exception as e:
         return []
 
 tab1, tab2 = st.tabs(["🔍 논문 탐색 및 맞춤 분석", "🗄️ 내 연구 DB (My Library)"])
@@ -87,7 +107,6 @@ with tab1:
         search_input = st.text_input("🔍 검색어, 연구 주제를 입력하세요 (예: 자율주행 최신 논문 추천해줘)")
         st.markdown("---")
         st.markdown("**💡 맞춤형 분석 요구사항 (선택사항)**")
-        # ✨ 개인 이름(김호민 교수님)을 완전히 제거하고 일반적인 예시로 수정했습니다.
         custom_context = st.text_area(
             "현재 연구 상황이나 특별히 알고 싶은 내용을 적어주세요.", 
             placeholder="예: 저는 인공지능 연구를 시작하는 초보자입니다. 이 논문의 핵심 알고리즘이 기존 모델들과 어떻게 다른지 비유를 들어 쉽게 설명해주세요."
@@ -95,18 +114,20 @@ with tab1:
         submit_button = st.form_submit_button("🚀 AI 스마트 검색", use_container_width=True)
 
     if submit_button and search_input:
-        with st.spinner("최상위 관련 논문을 찾고 있습니다..."):
+        # 번역 때문에 시간이 살짝 더 걸리므로 안내 멘트 추가
+        with st.spinner("최상위 관련 논문을 찾고, 한국어로 번역하고 있습니다... (약 2~3초 소요)"):
             st.session_state.search_results = search_arxiv_papers(search_input)
 
     if st.session_state.get("search_results"):
-        st.markdown("### 📄 발견된 최상위 논문")
+        st.markdown("### 📄 발견된 최상위 논문 (한국어 자동 번역 🇰🇷)")
         for idx, paper in enumerate(st.session_state.search_results):
             with st.expander(f"[{idx+1}] {paper['title']} (클릭하여 열기)", expanded=True):
                 st.caption(f"✍️ 저자: {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
-                st.write(paper['summary'][:250] + "...")
+                st.markdown(f"**원제(English)**: *{paper['en_title']}*")
+                st.write(f"**초록 요약**: {paper['summary'][:350]}...")
                 
                 c1, c2, c3 = st.columns([2, 3, 2])
-                with c1: st.link_button("📄 원문 보기", paper['pdf_url'], use_container_width=True)
+                with c1: st.link_button("📄 영문 원본 보기", paper['pdf_url'], use_container_width=True)
                 with c2: btn_analyze = st.button("👁️ 맞춤형 심층 분석 실행", key=f"ana_{paper['id']}", use_container_width=True)
                 with c3: btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
                 
@@ -115,7 +136,7 @@ with tab1:
                     else: st.warning("이미 DB에 저장된 논문입니다.")
 
                 if btn_analyze:
-                    with st.spinner(f"⚡ 요구사항을 반영하여 '{paper['title']}' 논문을 정밀 분석 중입니다..."):
+                    with st.spinner(f"⚡ 요구사항을 반영하여 논문을 정밀 분석 중입니다..."):
                         try:
                             payload = {"pdf_url": paper['pdf_url'], "custom_context": custom_context}
                             response = requests.post(CLOUD_RUN_URL, json=payload, timeout=120)
