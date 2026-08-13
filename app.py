@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
+import re
 
 # 페이지 기본 설정
 st.set_page_config(
@@ -18,36 +19,37 @@ st.markdown("---")
 # GCP Cloud Run 백엔드 엔드포인트 주소
 CLOUD_RUN_URL = "https://parse-arxiv-pdf-810432145390.asia-northeast3.run.app"
 
-# 1. 검색 영역 UI
-col1, col2 = st.columns([4, 1])
+# 한국어/자연어 검색어를 ArXiv 학술 키워드로 스마트 변환하는 함수
+def parse_smart_query(user_query):
+    q = user_query.strip().lower()
+    
+    # ArXiv ID 형태인 경우 (예: 2310.06825, 1706.03762)
+    if re.search(r'\d{4}\.\d{4,5}', q):
+        match = re.search(r'\d{4}\.\d{4,5}', q)
+        return f"id:{match.group(0)}"
 
-with col1:
-    search_input = st.text_input(
-        "검색어, 연구 주제, 또는 ArXiv ID를 입력하세요:",
-        value="초전도체",
-        placeholder="예: 초전도체, ai 관련 논문 추천해줘, 2310.06825, HTS Coil"
-    )
-
-with col2:
-    st.write("") # 버튼 높이 맞춤용
-    st.write("")
-    btn_search = st.button("🔍 검색", use_container_width=True)
+    # 도메인 키워드 맵핑 (한글/자연어 -> ArXiv 전문 키워드)
+    if "초전도" in q or "superconduct" in q:
+        return "all:superconductivity OR all:HTS coil"
+    elif "ai" in q or "인공지능" in q or "llm" in q or "머신러닝" in q:
+        return "all:artificial intelligence OR all:large language model OR all:machine learning"
+    elif "트랜스포머" in q or "transformer" in q:
+        return "all:transformer attention"
+    
+    # 일반 불용어 제거 및 영문 키워드 추출
+    clean = re.sub(r'[^\w\s]', '', q)
+    for word in ["추천해줘", "추천", "관련", "논문", "찾아줘", "대해", "보여줘", "원해"]:
+        clean = clean.replace(word, "")
+    clean = clean.strip()
+    
+    return f"all:{clean}" if clean else "all:artificial intelligence"
 
 # ArXiv API 검색 함수
-def search_arxiv_papers(query, max_results=4):
-    clean_query = query.strip()
+def search_arxiv_papers(user_query, max_results=4):
+    arxiv_query = parse_smart_query(user_query)
     
-    # 한국어 자연어 검색어 대응 정제
-    search_term = clean_query
-    for stop_word in ["추천해줘", "관련", "논문", "찾아줘", "대해"]:
-        search_term = search_term.replace(stop_word, "").strip()
-    if not search_term:
-        search_term = "artificial intelligence"
-    if search_term == "초전도체":
-        search_term = "superconductivity"
-
     try:
-        url = f"https://export.arxiv.org/api/query?search_query=all:{search_term}&start=0&max_results={max_results}"
+        url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy=submittedDate&sortOrder=descending"
         res = requests.get(url, timeout=10)
         root = ET.fromstring(res.text)
         
@@ -57,7 +59,7 @@ def search_arxiv_papers(query, max_results=4):
             summary = entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip()
             published = entry.find('{http://www.w3.org/2005/Atom}published').text[:10]
             
-            # 저자
+            # 저자 추출
             authors = [a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')]
             author_str = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
             
@@ -77,13 +79,27 @@ def search_arxiv_papers(query, max_results=4):
     except Exception as e:
         return []
 
-# 세션 상태 초기화 (검색 결과 및 분석 결과 유지)
+# 세션 상태 초기화
 if "search_results" not in st.session_state:
     st.session_state.search_results = []
 
-# 검색 버튼 클릭 시
-if btn_search and search_input:
-    with st.spinner(f"🔍 ArXiv에서 '{search_input}' 관련 최신 논문을 찾는 중..."):
+# 1. 폼(Form)을 활용하여 엔터(Enter) 키 제출 구현
+with st.form(key="search_form", clear_on_submit=False):
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        search_input = st.text_input(
+            "검색어, 연구 주제, 또는 ArXiv ID를 입력하세요 (엔터키로 즉시 검색):",
+            value="ai 관련 논문 추천해줘",
+            placeholder="예: ai 관련 논문 추천해줘, 초전도체, 2310.06825"
+        )
+    with col2:
+        st.write("") # 높이 맞춤용
+        st.write("")
+        submit_button = st.form_submit_button("🔍 검색", use_container_width=True)
+
+# 엔터 키나 검색 버튼을 눌렀을 때 실행
+if submit_button and search_input:
+    with st.spinner(f"🔍 ArXiv에서 '{search_input}' 관련 논문을 검색 중입니다..."):
         st.session_state.search_results = search_arxiv_papers(search_input)
 
 # 2. 검색 결과 목록 출력
@@ -94,7 +110,7 @@ if st.session_state.search_results:
         with st.container():
             st.markdown(f"#### {idx+1}. {paper['title']}")
             st.caption(f"✍️ 저자: {paper['authors']} | 📅 발행일: {paper['published']} | 🆔 arXiv:{paper['id']}")
-            st.write(f"**초록 (Abstract)**: {paper['summary'][:250]}...")
+            st.write(f"**초록 (Abstract)**: {paper['summary'][:280]}...")
             
             c1, c2, c3 = st.columns([2, 2, 4])
             with c1:
@@ -123,5 +139,5 @@ if st.session_state.search_results:
                     except Exception as e:
                         st.error(f"분석 중 연결 에러 발생: {str(e)}")
 
-elif btn_search:
+elif submit_button:
     st.warning("관련 논문을 찾지 못했습니다. 다른 검색어로 시도해 보세요.")
