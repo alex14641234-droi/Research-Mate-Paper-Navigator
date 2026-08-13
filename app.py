@@ -7,7 +7,6 @@ import json
 import os
 from datetime import datetime
 
-# 페이지 기본 설정
 st.set_page_config(page_title="Research Mate V5.0", page_icon="🔬", layout="wide")
 
 st.title("🔬 Research Mate & Paper Navigator V5.0")
@@ -17,17 +16,14 @@ st.markdown("---")
 CLOUD_RUN_URL = "https://parse-arxiv-pdf-810432145390.asia-northeast3.run.app"
 DB_FILE = "my_lab_db.json"
 
-# 로컬 JSON 기반 개인 DB 로드 함수
 def load_db():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return []
 
-# 개인 DB 저장 함수
 def save_to_db(paper_info):
     db = load_db()
-    # 중복 체크
     if not any(p['id'] == paper_info['id'] for p in db):
         paper_info['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
         db.append(paper_info)
@@ -36,7 +32,6 @@ def save_to_db(paper_info):
         return True
     return False
 
-# 스마트 검색 에이전트
 def parse_smart_query(user_query):
     q = user_query.strip().lower()
     match = re.search(r'\d{4}\.\d{4,5}', q)
@@ -85,17 +80,17 @@ def search_arxiv_papers(user_query, max_results=4):
     except:
         return []
 
-# UI 탭 분리
-tab1, tab2 = st.tabs(["🔍 논문 탐색 및 맞춤 분석", "🗄️ 내 연구실 DB (My Library)"])
+tab1, tab2 = st.tabs(["🔍 논문 탐색 및 맞춤 분석", "🗄️ 내 연구 DB (My Library)"])
 
 with tab1:
     with st.form(key="search_form"):
         search_input = st.text_input("🔍 검색어, 연구 주제를 입력하세요 (예: 자율주행 최신 논문 추천해줘)")
         st.markdown("---")
         st.markdown("**💡 맞춤형 분석 요구사항 (선택사항)**")
+        # ✨ 개인 이름(김호민 교수님)을 완전히 제거하고 일반적인 예시로 수정했습니다.
         custom_context = st.text_area(
             "현재 연구 상황이나 특별히 알고 싶은 내용을 적어주세요.", 
-            placeholder="예: 저는 김호민 교수님 연구실 신입생입니다. 이 논문이 AC 손실 저감에 어떻게 쓰일 수 있을지 중점적으로 리뷰해주세요."
+            placeholder="예: 저는 인공지능 연구를 시작하는 초보자입니다. 이 논문의 핵심 알고리즘이 기존 모델들과 어떻게 다른지 비유를 들어 쉽게 설명해주세요."
         )
         submit_button = st.form_submit_button("🚀 AI 스마트 검색", use_container_width=True)
 
@@ -115,12 +110,10 @@ with tab1:
                 with c2: btn_analyze = st.button("👁️ 맞춤형 심층 분석 실행", key=f"ana_{paper['id']}", use_container_width=True)
                 with c3: btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
                 
-                # 저장 버튼 로직
                 if btn_save:
-                    if save_to_db(paper): st.success("✅ [내 연구실 DB]에 저장되었습니다! 상단 탭에서 확인하세요.")
+                    if save_to_db(paper): st.success("✅ [내 연구 DB]에 저장되었습니다! 상단 탭에서 확인하세요.")
                     else: st.warning("이미 DB에 저장된 논문입니다.")
 
-                # 분석 버튼 로직
                 if btn_analyze:
                     with st.spinner(f"⚡ 요구사항을 반영하여 '{paper['title']}' 논문을 정밀 분석 중입니다..."):
                         try:
