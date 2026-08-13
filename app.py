@@ -2,99 +2,126 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-# 페이지 기본 설정 및 디자인
+# 페이지 기본 설정
 st.set_page_config(
     page_title="Research Mate & Paper Navigator V5.0",
     page_icon="🔬",
     layout="wide"
 )
 
-# 메인 타이틀 및 소개
+# 메인 헤더
 st.title("🔬 Research Mate & Paper Navigator V5.0")
 st.caption("ArXiv 연동, 3단계 수식 정밀 해설(Math Dissector), GitHub 코드 매핑 및 R&D 지능형 분석 플랫폼")
 
 st.markdown("---")
 
-# 검색 및 입력 세션
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    search_query = st.text_input(
-        "분석할 ArXiv ID, 논문 URL, 또는 키워드(예: 초전도체, Mistral 7B)를 입력하세요:",
-        value="2310.06825",
-        placeholder="예: 초전도체, 2310.06825, 또는 https://arxiv.org/abs/2310.06825"
-    )
-
-with col2:
-    st.write("") # 간격 맞춤용
-    st.write("")
-    btn_analyze = st.button("🚀 심층 분석 실행", use_container_width=True)
-
 # GCP Cloud Run 백엔드 엔드포인트 주소
 CLOUD_RUN_URL = "https://parse-arxiv-pdf-810432145390.asia-northeast3.run.app"
 
-def resolve_pdf_url(query):
-    """
-    입력값이 일반 키워드(예: '초전도체')인 경우 ArXiv API로 최신 논문 PDF URL을 자동 추출하고,
-    ArXiv ID나 URL인 경우 정상 PDF URL로 변환합니다.
-    """
-    query = query.strip()
+# 1. 검색 영역 UI
+col1, col2 = st.columns([4, 1])
+
+with col1:
+    search_input = st.text_input(
+        "검색어, 연구 주제, 또는 ArXiv ID를 입력하세요:",
+        value="초전도체",
+        placeholder="예: 초전도체, ai 관련 논문 추천해줘, 2310.06825, HTS Coil"
+    )
+
+with col2:
+    st.write("") # 버튼 높이 맞춤용
+    st.write("")
+    btn_search = st.button("🔍 검색", use_container_width=True)
+
+# ArXiv API 검색 함수
+def search_arxiv_papers(query, max_results=4):
+    clean_query = query.strip()
     
-    # 1. 이미 URL이거나 ArXiv ID 형태인 경우
-    if query.startswith("http://") or query.startswith("https://"):
-        if "arxiv.org/abs/" in query:
-            return query.replace("arxiv.org/abs/", "arxiv.org/pdf/") + ".pdf"
-        return query
-    
-    # 2. ArXiv ID 형태인 경우 (예: 2310.06825 또는 1706.03762)
-    if any(c.isdigit() for c in query) and "." in query and len(query) < 15:
-        clean_id = query.replace("arXiv:", "").strip()
-        return f"https://arxiv.org/pdf/{clean_id}.pdf"
-    
-    # 3. 일반 단어/키워드인 경우 (예: '초전도체', 'HTS Coil') -> ArXiv API 검색
+    # 한국어 자연어 검색어 대응 정제
+    search_term = clean_query
+    for stop_word in ["추천해줘", "관련", "논문", "찾아줘", "대해"]:
+        search_term = search_term.replace(stop_word, "").strip()
+    if not search_term:
+        search_term = "artificial intelligence"
+    if search_term == "초전도체":
+        search_term = "superconductivity"
+
     try:
-        arxiv_api_url = f"https://export.arxiv.org/api/query?search_query=all:{query}&start=0&max_results=1"
-        res = requests.get(arxiv_api_url, timeout=10)
+        url = f"https://export.arxiv.org/api/query?search_query=all:{search_term}&start=0&max_results={max_results}"
+        res = requests.get(url, timeout=10)
         root = ET.fromstring(res.text)
         
-        # XML에서 pdf url 추출
+        papers = []
         for entry in root.findall('{http://www.w3.org/2005/Atom}entry'):
-            for link in entry.findall('{http://www.w3.org/2005/Atom}link'):
-                if link.attrib.get('title') == 'pdf':
-                    return link.attrib.get('href') + ".pdf"
-                
-        # 기본 fallback
-        return "https://arxiv.org/pdf/2310.06825.pdf"
-    except Exception:
-        return f"https://arxiv.org/pdf/{query}.pdf"
-
-if btn_analyze and search_query:
-    with st.spinner("🔍 키워드 검색 및 V5.0 Gemini 1.5 Pro 멀티모달 비전 엔진으로 논문을 정밀 분석 중입니다..."):
-        try:
-            # 1. 입력값을 올바른 PDF URL로 변환
-            target_pdf_url = resolve_pdf_url(search_query)
-            st.info(f"📄 분석 대상 논문 PDF: `{target_pdf_url}`")
+            title = entry.find('{http://www.w3.org/2005/Atom}title').text.replace('\n', ' ').strip()
+            summary = entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip()
+            published = entry.find('{http://www.w3.org/2005/Atom}published').text[:10]
             
-            # 2. GCP Cloud Run 백엔드 API 호출
-            payload = {"pdf_url": target_pdf_url}
-            response = requests.post(CLOUD_RUN_URL, json=payload, timeout=120)
+            # 저자
+            authors = [a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')]
+            author_str = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
             
-            if response.status_code == 200:
-                result_data = response.json()
-                extracted_text = result_data.get("extracted_text", "분석 결과를 가져오지 못했습니다.")
-                
-                st.success("✅ V5.0 멀티모달 정밀 분석이 성공적으로 완료되었습니다!")
-                
-                # 분석 결과 출력 (마크다운 지원)
-                st.markdown("### 📊 V5.0 심층 분석 리포트")
-                st.markdown(extracted_text)
-                
-            else:
-                st.error(f"❌ 백엔드 분석 실패 (코드: {response.status_code}): {response.text}")
-                
-        except Exception as e:
-            st.error(f"❌ 연결 에러 발생: {str(e)}")
+            # ID 및 PDF 링크
+            paper_id = entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]
+            pdf_url = f"https://arxiv.org/pdf/{paper_id}.pdf"
+            
+            papers.append({
+                "id": paper_id,
+                "title": title,
+                "authors": author_str,
+                "published": published,
+                "summary": summary,
+                "pdf_url": pdf_url
+            })
+        return papers
+    except Exception as e:
+        return []
 
-# 하단 가이드 팁
-st.markdown("---")
-st.info("💡 **TIP**: `초전도체`, `HTS Coil`, `Mistral 7B`, 또는 `2310.06825` 등 단어나 ID 아무거나 입력해보세요!")
+# 세션 상태 초기화 (검색 결과 및 분석 결과 유지)
+if "search_results" not in st.session_state:
+    st.session_state.search_results = []
+
+# 검색 버튼 클릭 시
+if btn_search and search_input:
+    with st.spinner(f"🔍 ArXiv에서 '{search_input}' 관련 최신 논문을 찾는 중..."):
+        st.session_state.search_results = search_arxiv_papers(search_input)
+
+# 2. 검색 결과 목록 출력
+if st.session_state.search_results:
+    st.markdown(f"### 📄 검색된 추천 논문 목록 ({len(st.session_state.search_results)}건)")
+    
+    for idx, paper in enumerate(st.session_state.search_results):
+        with st.container():
+            st.markdown(f"#### {idx+1}. {paper['title']}")
+            st.caption(f"✍️ 저자: {paper['authors']} | 📅 발행일: {paper['published']} | 🆔 arXiv:{paper['id']}")
+            st.write(f"**초록 (Abstract)**: {paper['summary'][:250]}...")
+            
+            c1, c2, c3 = st.columns([2, 2, 4])
+            with c1:
+                st.link_button("📄 PDF 원문 보기", paper['pdf_url'], use_container_width=True)
+            with c2:
+                btn_analyze_item = st.button(f"👁️ V5.0 멀티모달 심층 분석", key=f"btn_analyze_{paper['id']}", use_container_width=True)
+            
+            st.markdown("---")
+            
+            # 특정 논문의 심층 분석 버튼을 눌렀을 때
+            if btn_analyze_item:
+                with st.spinner(f"⚡ '{paper['title']}' 논문의 3단계 수식, GitHub 코드, 시각 다이어그램을 정밀 분석 중입니다..."):
+                    try:
+                        payload = {"pdf_url": paper['pdf_url']}
+                        response = requests.post(CLOUD_RUN_URL, json=payload, timeout=120)
+                        
+                        if response.status_code == 200:
+                            res_json = response.json()
+                            extracted_text = res_json.get("extracted_text", "")
+                            
+                            st.success(f"✅ '{paper['title']}' V5.0 심층 분석 완료!")
+                            st.markdown("## 📊 V5.0 R&D 심층 분석 리포트")
+                            st.markdown(extracted_text)
+                        else:
+                            st.error(f"백엔드 분석 실패: {response.text}")
+                    except Exception as e:
+                        st.error(f"분석 중 연결 에러 발생: {str(e)}")
+
+elif btn_search:
+    st.warning("관련 논문을 찾지 못했습니다. 다른 검색어로 시도해 보세요.")
