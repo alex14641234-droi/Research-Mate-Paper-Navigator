@@ -11,17 +11,24 @@ import google.generativeai as genai
 
 st.set_page_config(page_title="Research Mate", page_icon="🔬", layout="wide")
 
-# ✨ API 키로 접속 가능한 모델만 실시간으로 긁어오는 핵심 함수
+# ✨ API 키로 접속 가능한 모델 중 3.6, 3.5, 3.1 pro 계열만 쏙 뽑아오는 함수
 @st.cache_data(show_spinner=False)
 def get_available_models(api_key):
     try:
         genai.configure(api_key=api_key)
-        return [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        all_models = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # 고객님이 요청하신 핵심 모델 버전만 필터링!
+        filtered = [m for m in all_models if "3.6" in m or "3.5" in m or "3.1-pro" in m]
+        
+        # 만약 발급받은 API 키 권한 문제로 해당 버전이 안 뜬다면, 아쉬운대로 전체 목록 반환
+        return filtered if filtered else all_models
     except Exception:
         return []
 
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
+API_KEYS_DB_FILE = "api_keys_db.json" # API 키 유지를 위한 전용 DB 추가!
 
 # --- 💾 데이터베이스 & 인증 로직 ---
 def load_json(filepath):
@@ -56,6 +63,16 @@ def login(username, password):
     if username in users and users[username] == hash_password(password):
         return True
     return False
+
+# ✨ API 키 자동 저장 및 불러오기 로직
+def save_api_key(username, api_key):
+    db = load_json(API_KEYS_DB_FILE)
+    db[username] = api_key
+    save_json(API_KEYS_DB_FILE, db)
+
+def get_api_key(username):
+    db = load_json(API_KEYS_DB_FILE)
+    return db.get(username, "")
 
 def save_paper_to_db(username, paper_info):
     db = load_json(PAPERS_DB_FILE)
@@ -190,7 +207,6 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
 
 # --- 💻 메인 앱 & UI ---
 
-# ✨ 새로고침 시 자동 로그아웃 방지 로직 (URL 쿼리 파라미터 활용)
 if "logged_in" not in st.session_state:
     if "user" in st.query_params:
         st.session_state.logged_in = True
@@ -212,7 +228,6 @@ if not st.session_state.logged_in:
             if login(login_id, login_pw):
                 st.session_state.logged_in = True
                 st.session_state.username = login_id
-                # ✨ 로그인 성공 시 URL에 아이디를 박아두어 새로고침 방어
                 st.query_params["user"] = login_id
                 st.rerun()
             else:
@@ -235,7 +250,6 @@ else:
         if st.button("로그아웃"):
             st.session_state.logged_in = False
             st.session_state.username = ""
-            # ✨ 명시적 로그아웃 시 URL에서 아이디 정보 완전 삭제
             if "user" in st.query_params:
                 del st.query_params["user"]
             st.rerun()
@@ -243,19 +257,26 @@ else:
         st.markdown("---")
         st.markdown("### 🔑 Google AI Studio 설정")
         st.markdown("구글에서 [무료 API 키 발급받기](https://aistudio.google.com/app/apikey)")
-        api_key = st.text_input("Gemini API Key를 입력하세요", type="password")
+        
+        # ✨ DB에서 이전 API 키 자동 불러오기
+        saved_api_key = get_api_key(st.session_state.username)
+        api_key = st.text_input("Gemini API Key를 입력하세요", type="password", value=saved_api_key)
+        
+        # 입력된 API 키가 기존 저장된 키와 다르면 즉시 DB 갱신
+        if api_key and api_key != saved_api_key:
+            save_api_key(st.session_state.username, api_key)
         
         selected_model = None
         if api_key:
-            st.success("API 키 인식 완료! 🚀")
+            st.success("API 키 영구 보존 모드 활성화! 🚀")
             
-            with st.spinner("사용 가능한 AI 모델 목록을 구글에서 불러오는 중..."):
+            with st.spinner("사용 가능한 AI 모델 목록을 불러오는 중..."):
                 available_models = get_available_models(api_key)
                 
             if available_models:
                 st.markdown("---")
                 st.markdown("### ⚙️ 최적 분석 모델 선택")
-                st.caption("고객님의 API 키로 작동 보장되는 모델들입니다.")
+                st.caption("요청하신 핵심 모델(3.6, 3.5, 3.1)만 깔끔하게 보여드립니다.")
                 
                 default_idx = 0
                 for i, m in enumerate(available_models):
@@ -264,7 +285,7 @@ else:
                         break
                         
                 selected_model = st.selectbox(
-                    "AI 모델 (자동 추천 모델이 빠릅니다)",
+                    "AI 모델",
                     options=available_models,
                     index=default_idx
                 )
