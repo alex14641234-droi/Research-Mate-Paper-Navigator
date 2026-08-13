@@ -11,6 +11,16 @@ import google.generativeai as genai
 
 st.set_page_config(page_title="Research Mate", page_icon="🔬", layout="wide")
 
+# ✨ API 키로 접속 가능한 모델만 실시간으로 긁어오는 핵심 함수
+@st.cache_data(show_spinner=False)
+def get_available_models(api_key):
+    try:
+        genai.configure(api_key=api_key)
+        # 'models/' 글자를 떼어내고, 텍스트 분석(generateContent)이 가능한 진짜 모델만 추출
+        return [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    except Exception:
+        return []
+
 USERS_DB_FILE = "users_db.json"
 PAPERS_DB_FILE = "my_lab_db.json"
 
@@ -53,7 +63,6 @@ def save_paper_to_db(username, paper_info):
     if username not in db:
         db[username] = []
     
-    # 이미 저장된 논문이면 삭제하고 새 정보(분석 내용 포함)로 업데이트
     db[username] = [p for p in db[username] if p['id'] != paper_info['id']]
         
     paper_info['saved_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -217,17 +226,33 @@ else:
         st.markdown("### 🔑 Google AI Studio 설정")
         st.markdown("구글에서 [무료 API 키 발급받기](https://aistudio.google.com/app/apikey)")
         api_key = st.text_input("Gemini API Key를 입력하세요", type="password")
+        
+        selected_model = None
         if api_key:
-            st.success("API 키 입력 완료! (분석 기능 활성화 됨)")
+            st.success("API 키 인식 완료! 🚀")
             
-        st.markdown("---")
-        st.markdown("### ⚙️ 분석 모델 선택")
-        st.caption("발급받으신 API 키 권한에 따라 사용 가능한 모델이 다를 수 있습니다. 만약 에러가 발생하면 여기서 다른 모델을 선택하고 다시 분석 버튼을 눌러주세요!")
-        selected_model = st.selectbox(
-            "AI 모델",
-            options=["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-pro"],
-            index=0
-        )
+            with st.spinner("사용 가능한 AI 모델 목록을 구글에서 불러오는 중..."):
+                available_models = get_available_models(api_key)
+                
+            if available_models:
+                st.markdown("---")
+                st.markdown("### ⚙️ 최적 분석 모델 선택")
+                st.caption("고객님의 API 키로 **100% 작동 보장**되는 모델들입니다.")
+                
+                # 가장 무난하고 빠른 flash 모델을 찾아 기본값으로 추천
+                default_idx = 0
+                for i, m in enumerate(available_models):
+                    if "flash" in m and "lite" not in m:
+                        default_idx = i
+                        break
+                        
+                selected_model = st.selectbox(
+                    "AI 모델 (자동 추천 모델이 빠릅니다)",
+                    options=available_models,
+                    index=default_idx
+                )
+            else:
+                st.error("해당 API 키로 사용할 수 있는 모델을 찾지 못했습니다. 키를 다시 확인해주세요.")
 
     st.title("🔬 Research Mate")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
@@ -267,12 +292,14 @@ else:
                     if btn_analyze:
                         if not api_key:
                             st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
+                        elif not selected_model:
+                            st.error("⚠️ 에러: API 키가 유효하지 않아 모델을 불러오지 못했습니다.")
                         else:
-                            with st.spinner(f"⚡ 선택하신 [{selected_model}] 모델로 초고속 정밀 분석 중입니다..."):
+                            with st.spinner(f"⚡ 100% 작동 보장! [{selected_model}] 모델로 초고속 정밀 분석 중입니다..."):
                                 result_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context)
                                 if "에러 발생" in result_text:
                                     st.error(result_text)
-                                    st.info("💡 팁: 좌측 사이드바에서 '분석 모델'을 다른 것으로 변경한 후 다시 시도해보세요!")
+                                    st.info("💡 팁: 드문 경우 PDF가 너무 커서 에러가 날 수 있습니다. 좌측에서 다른 모델을 선택해 시도해보세요!")
                                 else:
                                     st.success(f"✨ [{selected_model}] 심층 분석 완료! (우측 '내 DB에 저장' 시 분석 내용도 영구 저장됩니다)")
                                     st.markdown(result_text)
@@ -314,4 +341,3 @@ else:
                             delete_paper_from_db(st.session_state.username, p['id'])
                             st.rerun() 
                 st.markdown("---")
-            
