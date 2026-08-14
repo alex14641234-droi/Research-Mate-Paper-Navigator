@@ -275,15 +275,20 @@ def search_arxiv_papers(user_query, max_results=4):
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         for attempt in range(3):
-            res = requests.get(url, headers=headers, timeout=10)
-            if res.status_code == 429:
+            try:
+                res = requests.get(url, headers=headers, timeout=20)
+                if res.status_code == 429:
+                    if attempt == 2:
+                        raise ValueError("RATE_LIMIT")
+                    time.sleep(3)
+                    continue
+                res.raise_for_status()
+                break
+            except requests.exceptions.RequestException as e:
                 if attempt == 2:
-                    st.error("🚨 ArXiv 서버 접근 제한(Rate Limit)에 걸렸습니다. 1~2분 정도 후에 다시 시도해주세요.")
-                    return []
+                    raise ValueError(f"TIMEOUT: {e}")
                 time.sleep(3)
                 continue
-            res.raise_for_status()
-            break
             
         root = ET.fromstring(res.text)
         papers = []
@@ -306,6 +311,8 @@ def search_arxiv_papers(user_query, max_results=4):
                 "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
         return papers
+    except ValueError as ve:
+        raise ve
     except Exception:
         return []
 
@@ -465,10 +472,17 @@ else:
 
             if submit_search and search_input:
                 with st.spinner("논문을 찾고 있습니다... (잠시만 기다려주세요)"):
-                    results = search_arxiv_papers(search_input)
-                    st.session_state.search_results = results
-                    if not results:
-                        st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
+                    try:
+                        results = search_arxiv_papers(search_input)
+                        st.session_state.search_results = results
+                        if not results:
+                            st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
+                    except ValueError as e:
+                        if str(e) == "RATE_LIMIT":
+                            st.error("🚨 ArXiv 서버 접근 제한(Rate Limit)에 걸렸습니다. 1~2분 정도 후에 다시 시도해주세요.")
+                        else:
+                            st.error(f"🚨 ArXiv 서버 응답 지연(Timeout) 또는 접속 오류가 발생했습니다. 잠시 후 다시 시도해 주세요. ({e})")
+                        st.session_state.search_results = []
 
             if st.session_state.get("search_results"):
                 for idx, paper in enumerate(st.session_state.search_results):
@@ -639,12 +653,4 @@ else:
                             update_chat_session_title(st.session_state.username, curr_session, new_title)
 
                         with chat_container:
-                            with st.chat_message("user"): st.markdown(final_query)
-                        save_chat_message(st.session_state.username, curr_session, "user", final_query)
-                        
-                        with chat_container:
-                            with st.chat_message("assistant"):
-                                response_stream = chat_with_ai_stream(api_key, selected_model, final_query, selected_papers_data, get_chat_history(st.session_state.username, curr_session))
-                                # 실시간 스트리밍 출력!
-                                ai_response = st.write_stream(response_stream)
-                        save_chat_message(st.session_state.username, curr_session, "assistant", ai_response)
+                            with st.chat_message("user"): st.markdown(final_quer
