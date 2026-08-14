@@ -296,7 +296,7 @@ def parse_smart_query(user_query):
         sort_by = "relevance"
 
     match = re.search(r'\d{4}\.\d{4,5}', q)
-    if match: return f"id:{match.group(0)}", sort_by, target_years, start_dt, end_dt
+    if match: return f"id:{match.group(0)}", sort_by, target_years
 
     keyword_map = {
         "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
@@ -339,17 +339,15 @@ def parse_smart_query(user_query):
 
         final_query = f'all:{en_clean}'
 
-    if start_dt and end_dt:
-        final_query = f'({final_query}) AND submittedDate:[{start_dt} TO {end_dt}]'
-
-    return final_query, sort_by, target_years, start_dt, end_dt
+    return final_query, sort_by, target_years
 
 def search_arxiv_papers(user_query, max_results=5):
     import time
-    raw_query, sort_by, target_years, start_dt, end_dt = parse_smart_query(user_query)
+    raw_query, sort_by, target_years = parse_smart_query(user_query)
     encoded_query = urllib.parse.quote(raw_query)
     try:
-        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=30&sortBy={sort_by}&sortOrder=descending"
+        # Fetch 50 candidate papers across years
+        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=50&sortBy={sort_by}&sortOrder=descending"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         for attempt in range(3):
@@ -379,21 +377,28 @@ def search_arxiv_papers(user_query, max_results=5):
             raw_id = entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]
             clean_id = re.sub(r'v\d+$', '', raw_id)
             
+            pub_date = entry.find('{http://www.w3.org/2005/Atom}published').text[:10]
             papers.append({
                 "id": clean_id,
                 "title": ko_title,
                 "en_title": title,
                 "authors": ", ".join([a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')][:3]),
-                "published": entry.find('{http://www.w3.org/2005/Atom}published').text[:10],
+                "published": pub_date,
                 "summary": ko_summary,
                 "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
 
-        # Strict Python Filter for requested Era / Years!
+        # Strict Python Year Filter / Sort!
         if target_years:
+            # 1. Exact match papers published in target_years
             strict_matches = [p for p in papers if any(p['published'].startswith(y) for y in target_years)]
             if strict_matches:
-                papers = strict_matches
+                return strict_matches[:max_results]
+            
+            # 2. Sort by closeness to the requested target year
+            ref_year = int(target_years[0])
+            papers.sort(key=lambda p: abs(int(p['published'][:4]) - ref_year))
+            return papers[:max_results]
 
         return papers[:max_results]
     except ValueError as ve:
@@ -697,11 +702,6 @@ else:
             with st.spinner(f"'{query_to_search}' 관점으로 맞춤 논문을 탐색 중입니다..."):
                 try:
                     results = search_arxiv_papers(query_to_search)
-                    # Fallback if year-restricted query yields 0 results
-                    if not results and re.search(r'\b20\d{2}\b', query_to_search):
-                        fallback_q = re.sub(r'\b20\d{2}\b', '', query_to_search).strip()
-                        results = search_arxiv_papers(fallback_q)
-
                     st.session_state.search_results = results
                     if not results:
                         st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
@@ -1138,3 +1138,4 @@ else:
                                 # 실시간 스트리밍 출력!
                                 ai_response = st.write_stream(response_stream)
                         save_chat_message(st.session_state.username, curr_session, "assistant", ai_response)
+
