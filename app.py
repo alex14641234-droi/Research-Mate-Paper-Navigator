@@ -214,33 +214,39 @@ def translate_to_ko(text):
     except Exception:
         return text
 
+def translate_to_en(text):
+    if not re.search(r'[가-힣]', text):
+        return text
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client": "gtx", "sl": "ko", "tl": "en", "dt": "t", "q": text}
+        res = requests.get(url, params=params, timeout=5)
+        data = res.json()
+        translated_text = "".join([sentence[0] for sentence in data[0]])
+        return translated_text
+    except Exception:
+        return text
+
 def parse_smart_query(user_query):
-    q = user_query.strip().lower()
+    q = user_query.strip()
     match = re.search(r'\d{4}\.\d{4,5}', q)
     if match: return f"id:{match.group(0)}", f"ArXiv ID: {match.group(0)}"
 
-    keyword_map = {
-        "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
-        "생성형": 'all:"generative model"', "비전": 'all:"computer vision"', "로봇": 'all:"robotics"',
-        "자율주행": 'all:"autonomous driving"', "이슈": 'all:"deep learning"', "핫한": 'all:"deep learning"'
-    }
+    clean = re.sub(r'[^\w\s가-힣]', '', q)
+    for word in ["추천해줘", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", "최신", "논문"]:
+        clean = clean.replace(word, "")
+    clean = clean.strip()
     
-    search_terms = []
-    for ko_word, en_query in keyword_map.items():
-        if ko_word in q: search_terms.append(f"({en_query})")
-            
-    if any(w in q for w in ["ai", "인공지능", "llm", "머신러닝", "딥러닝"]):
-        search_terms.append('(all:"artificial intelligence" OR all:"large language model")')
-        
-    if search_terms:
-        final_query = " AND ".join(search_terms)
-    else:
-        clean = re.sub(r'[^\w\s]', '', q)
-        for word in ["추천해줘", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", "최신", "논문"]:
-            clean = clean.replace(word, "")
-        final_query = 'all:"deep learning"' if re.search(r'[가-힣]', clean) or not clean.strip() else f'all:"{clean.strip()}"'
+    if not clean:
+        clean = "deep learning"
 
-    return urllib.parse.quote(final_query), "스마트 맞춤 키워드 변환 완료"
+    if re.search(r'[가-힣]', clean):
+        en_query = translate_to_en(clean)
+    else:
+        en_query = clean
+
+    final_query = f'all:"{en_query}"'
+    return urllib.parse.quote(final_query), "번역 검색 완료"
 
 def search_arxiv_papers(user_query, max_results=4):
     arxiv_query, _ = parse_smart_query(user_query)
