@@ -332,6 +332,8 @@ def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
         res = model.generate_content([{"mime_type": "application/pdf", "data": pdf_bytes}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
         return res.text
     except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower():
+            return "🚨 **API 사용량 초과 (Rate Limit / Quota Exceeded)**\n\nGoogle Gemini API의 무료 등급 요청 한도(분당 15회 등)를 초과했습니다. 약 **1~2분 뒤**에 다시 시도해주세요."
         return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
 
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
@@ -352,6 +354,8 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
         res = model.generate_content([{"mime_type": "application/pdf", "data": response.content}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
         return res.text
     except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower():
+            return "🚨 **API 사용량 초과 (Rate Limit / Quota Exceeded)**\n\nGoogle Gemini API의 무료 등급 요청 한도(분당 15회 등)를 초과했습니다. 약 **1~2분 뒤**에 다시 시도해주세요."
         return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
 
 def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, chat_history):
@@ -390,7 +394,10 @@ def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, c
         for chunk in res:
             yield chunk.text
     except Exception as e:
-        yield f"에러 발생: {str(e)}"
+        if "429" in str(e) or "quota" in str(e).lower():
+            yield "🚨 **API 사용량 초과 (Rate Limit / Quota Exceeded)**\n\nGoogle Gemini API의 무료 등급 요청 한도를 초과했습니다. 약 **1~2분 뒤**에 다시 질문해주세요."
+        else:
+            yield f"에러 발생: {str(e)}"
 
 # --- 💻 메인 앱 & UI ---
 
