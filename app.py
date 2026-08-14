@@ -354,20 +354,44 @@ def search_arxiv_papers(user_query, max_results=5):
 # --- 🤖 AI 분석 및 챗봇 로직 (스트리밍) ---
 def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
     genai.configure(api_key=api_key)
-    context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
-    prompt = """
-    당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
-    업로드된 로컬 PDF 논문을 바탕으로 다음 3가지를 가시성이 뛰어나고 깔끔한 마크다운 형식으로 정리해 주십시오:
-    ### 🔗 1. 핵심 요약 및 기여점
-    ### 🧮 2. 핵심 수식 및 변수 분석 (해당 시)
-    ### 📊 3. 주요 아키텍처 및 시각적 인사이트
-    """ + context_prompt
     
-    # Try primary selected model first, with auto-fallback to 3.x flash models on 429 quota error
+    if custom_context and custom_context.strip():
+        user_context_block = f"""
+🎯 **[사용자의 특정 키워드, 연구 맥락 및 맞춤 상황 요구사항]**:
+"{custom_context.strip()}"
+
+⚠️ **[최우선 분석 지침]**:
+분석 결과의 모든 섹션(초록 요약, 주요 알고리즘, 실험 결과, 한계점, 실전 응용)을 반드시 위 [사용자의 특정 키워드/연구 맥락/상황]에 100% 직접 맞추어 재해석하고 차별화된 맞춤형 시각으로 작성하십시오. 일반적이고 정형화된 요약 대신, 사용자가 제시한 특정 관심 키워드와 상황에 집중하여 차별화된 인사이트를 도출하십시오.
+"""
+    else:
+        user_context_block = "특별히 지정된 사용자 맥락이 없으므로, 논문의 일반적 기여점, 핵심 알고리즘 수식, 주요 아키텍처 및 종합 인사이트 관점에서 정밀 정리하십시오."
+
+    prompt = f"""
+당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가이자 수석 연구원입니다.
+업로드된 로컬 PDF 논문을 바탕으로 다음 지침에 맞춰 가시성이 뛰어나고 깔끔한 마크다운 분석 리포트를 작성해 주십시오.
+
+{user_context_block}
+
+### 🎯 1. 사용자 맞춤 관점 (특정 키워드 & 상황) 집중 분석
+- 사용자가 요구한 관심 키워드 및 질문 상황 관점에서 이 논문이 제공하는 가장 결정적인 인사이트와 시사점.
+
+### 🔗 2. 논문 핵심 기여점 (Contribution) & 공식 코드 (GitHub)
+- 논문 제안 방법론의 고유한 혁신성 및 공식 구현 링크 (PDF 내 명시 시 추출).
+
+### 🧮 3. 주요 아키텍처, 핵심 수식 및 실험 성과
+- 핵심 알고리즘 구조, 대표적 수식/변수 및 정량적 개선 결과.
+
+### 💡 4. 사용자의 연구 상황에 맞춘 실전 적용 조언 & 한계점
+- 본 논문의 연구 한계점과 사용자의 특정 연구 상황/키워드 관점에서 실제 연구 및 프로젝트에 응용할 때 고려해야 할 핵심 팁.
+"""
+    
+    # Dynamic temperature: higher temperature when custom context is provided for creative synthesis
+    temp = 0.4 if (custom_context and custom_context.strip()) else 0.2
+    
     for m_name in [model_name, "gemini-3.6-flash", "gemini-3.5-flash"]:
         try:
             model = genai.GenerativeModel(m_name)
-            res = model.generate_content([{"mime_type": "application/pdf", "data": pdf_bytes}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+            res = model.generate_content([{"mime_type": "application/pdf", "data": pdf_bytes}, prompt], generation_config={"max_output_tokens": 8192, "temperature": temp})
             return res.text
         except Exception as e:
             if ("429" in str(e) or "quota" in str(e).lower()) and m_name != "gemini-3.5-flash":
@@ -379,20 +403,43 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     response = requests.get(pdf_url, headers=headers, timeout=20)
     response.raise_for_status()
-    context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}" if custom_context else ""
-    prompt = """
-    당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
-    첨부된 PDF 논문을 바탕으로 다음을 정리해 주십시오:
-    ### 🔗 1. 공식 코드(GitHub) 주소
-    ### 🧮 2. 핵심 수식 및 변수 분석
-    ### 📊 3. 주요 아키텍처 및 시각적 인사이트
-    """ + context_prompt
+    
+    if custom_context and custom_context.strip():
+        user_context_block = f"""
+🎯 **[사용자의 특정 키워드, 연구 맥락 및 맞춤 상황 요구사항]**:
+"{custom_context.strip()}"
 
-    # Try primary selected model first, with auto-fallback to 3.x flash models on 429 quota error
+⚠️ **[최우선 분석 지침]**:
+분석 결과의 모든 섹션(초록 요약, 주요 알고리즘, 실험 결과, 한계점, 실전 응용)을 반드시 위 [사용자의 특정 키워드/연구 맥락/상황]에 100% 직접 맞추어 재해석하고 차별화된 맞춤형 시각으로 작성하십시오. 일반적이고 정형화된 요약 대신, 사용자가 제시한 특정 관심 키워드와 상황에 집중하여 차별화된 인사이트를 도출하십시오.
+"""
+    else:
+        user_context_block = "특별히 지정된 사용자 맥락이 없으므로, 논문의 일반적 기여점, 핵심 알고리즘 수식, 주요 아키텍처 및 종합 인사이트 관점에서 정밀 정리하십시오."
+
+    prompt = f"""
+당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가이자 수석 연구원입니다.
+첨부된 PDF 논문을 바탕으로 다음 지침에 맞춰 가시성이 뛰어나고 깔끔한 마크다운 분석 리포트를 작성해 주십시오.
+
+{user_context_block}
+
+### 🎯 1. 사용자 맞춤 관점 (특정 키워드 & 상황) 집중 분석
+- 사용자가 요구한 관심 키워드 및 질문 상황 관점에서 이 논문이 제공하는 가장 결정적인 인사이트와 시사점.
+
+### 🔗 2. 논문 핵심 기여점 (Contribution) & 공식 코드 (GitHub 주소 포함)
+- 논문 제안 방법론의 고유한 혁신성 및 공식 구현 링크 (PDF 내 명시 시 추출).
+
+### 🧮 3. 주요 아키텍처, 핵심 수식 및 실험 성과
+- 핵심 알고리즘 구조, 대표적 수식/변수 및 정량적 개선 결과.
+
+### 💡 4. 사용자의 연구 상황에 맞춘 실전 적용 조언 & 한계점
+- 본 논문의 연구 한계점과 사용자의 특정 연구 상황/키워드 관점에서 실제 연구 및 프로젝트에 응용할 때 고려해야 할 핵심 팁.
+"""
+
+    temp = 0.4 if (custom_context and custom_context.strip()) else 0.2
+
     for m_name in [model_name, "gemini-3.6-flash", "gemini-3.5-flash"]:
         try:
             model = genai.GenerativeModel(m_name)
-            res = model.generate_content([{"mime_type": "application/pdf", "data": response.content}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+            res = model.generate_content([{"mime_type": "application/pdf", "data": response.content}, prompt], generation_config={"max_output_tokens": 8192, "temperature": temp})
             return res.text
         except Exception as e:
             if ("429" in str(e) or "quota" in str(e).lower()) and m_name != "gemini-3.5-flash":
