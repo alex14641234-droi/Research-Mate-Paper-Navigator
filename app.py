@@ -272,7 +272,7 @@ def search_arxiv_papers(user_query, max_results=4):
     arxiv_query, _ = parse_smart_query(user_query)
     try:
         url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy=relevance&sortOrder=descending"
-        headers = {'User-Agent': 'ResearchMate/1.0 (mailto:contact@researchmate.com)'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         for attempt in range(3):
             try:
@@ -339,7 +339,7 @@ def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
-        headers = {'User-Agent': 'ResearchMate/1.0 (mailto:contact@researchmate.com)'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
         context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}" if custom_context else ""
