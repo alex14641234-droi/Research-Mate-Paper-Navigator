@@ -591,6 +591,8 @@ def compare_papers_with_gemini(api_key, model_name, papers_list):
 
 def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, chat_history):
     genai.configure(api_key=api_key)
+    
+    # 1. 논문 정보를 기반으로 System Prompt 구성
     context_str = ""
     if not selected_papers_data:
         context_str = "현재 선택된 논문이 없습니다. 일반적인 AI 어시스턴트로서 답변하세요."
@@ -598,32 +600,54 @@ def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, c
         for p in selected_papers_data:
             context_str += f"- 논문 제목: {p['title']}\n- 초록 요약: {p.get('summary', '제공 안됨')}\n- 기존 심층분석: {p.get('analysis_result', '분석 안됨')}\n\n"
 
-    history_text = ""
-    for msg in chat_history[-8:]: 
-        role = '사용자' if msg['role'] == 'user' else 'AI 비서'
-        history_text += f"{role}: {msg['content']}\n"
-        
-    prompt = f"""
+    sys_prompt = f"""
 당신은 세계 최고 수준의 연구 보조 AI 비서입니다.
-아래 제공된 [선택된 논문 정보]와 [이전 대화 내역]을 참고하여, 사용자의 [질문]에 한국어로 친절하고 전문적으로 답해주세요.
+아래 제공된 [선택된 논문 정보]를 참고하여, 사용자의 질문에 한국어로 친절하고 전문적으로 답해주세요.
+
 **[⚠️ 매우 중요한 지침 - 환각 방지(Hallucination Prevention)]**
 1. 반드시 제공된 [선택된 논문 정보] 내에서만 답변을 생성하십시오.
 2. 정보가 없다면 절대 추측하지 말고 모른다고 명확히 밝히십시오.
 
 [선택된 논문 정보]
 {context_str}
-
-[이전 대화 내역]
-{history_text}
-
-[질문]
-{user_query}
 """
-    model = genai.GenerativeModel(model_name)
+
+    # 2. 매개변수로 안전하게 넘어온 user_query를 활성 질문으로 명확히 지정
+    active_query = user_query.strip()
+    
+    # 3. 최신 활성 질문을 제외한 이전 대화(Prior History) 구성
+    # 최신 질문이 DB에 이미 저장되어 chat_history의 맨 끝에 존재하므로, 마지막 요소를 떼어내고 그 앞 대화들을 정제합니다.
+    prior_history = chat_history[:-1] if len(chat_history) > 1 else []
+    
+    formatted_history = []
+    last_role = None
+    
+    # 마지막 최대 10개 대화 중 징검다리 규칙(user -> model -> user)을 지키는 내역만 엄선하여 빌드
+    for msg in prior_history[-10:]:
+        role = 'user' if msg['role'] == 'user' else 'model'
+        
+        # 연속된 중복 역할 방지 (예: user 뒤에 바로 user가 또 들어오는 경우 패스)
+        if role == last_role:
+            continue
+            
+        formatted_history.append({"role": role, "parts": [msg['content']]})
+        last_role = role
+        
+    # 대화의 첫 시작은 무조건 'user'여야 안전하므로, 맨 앞이 model인 경우 제거
+    while formatted_history and formatted_history[0]['role'] == 'model':
+        formatted_history.pop(0)
+
+    # 4. Gemini 모델 초기화 및 대화 시작
+    model = genai.GenerativeModel(model_name, system_instruction=sys_prompt)
     try:
-        res = model.generate_content(prompt, generation_config={"temperature": 0.2}, stream=True)
+        # start_chat으로 세션을 생성하고, 정제된 이전 대화 역사를 바탕으로 대화 구동
+        chat = model.start_chat(history=formatted_history)
+        
+        # 새로운 활성 질문(active_query)을 명시적으로 스트리밍 전송하여 답변 트리거
+        res = chat.send_message(active_query, stream=True)
         for chunk in res:
             yield chunk.text
+            
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower():
             yield "🚨 **API 사용량 초과 (Rate Limit / Quota Exceeded)**\n\nGoogle Gemini API의 무료 등급 요청 한도를 초과했습니다. 약 **1~2분 뒤**에 다시 질문해주세요."
