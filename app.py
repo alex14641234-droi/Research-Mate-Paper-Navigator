@@ -275,6 +275,9 @@ def search_arxiv_papers(user_query, max_results=4):
         for attempt in range(3):
             res = requests.get(url, headers=headers, timeout=10)
             if res.status_code == 429:
+                if attempt == 2:
+                    st.error("🚨 ArXiv 서버 접근 제한(Rate Limit)에 걸렸습니다. 1~2분 정도 후에 다시 시도해주세요.")
+                    return []
                 time.sleep(3)
                 continue
             res.raise_for_status()
