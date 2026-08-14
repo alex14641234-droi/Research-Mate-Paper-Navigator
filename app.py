@@ -571,7 +571,31 @@ else:
                 with st.container():
                     st.markdown(f"#### 📌 {p['title']}")
                     st.caption(f"🆔 {p['id']} | 💾 {p['saved_at']}")
-                    with st.expander("🧠 AI 심층 분석 결과"): st.markdown(p.get('analysis_result', '분석 없음'))
+                    has_analysis = p.get('analysis_result') not in ["분석 안됨", "분석 없음", None]
+                    with st.expander("🧠 AI 심층 분석 결과", expanded=has_analysis):
+                        st.markdown(p.get('analysis_result', '분석 없음'))
+                    
+                    if not has_analysis and p.get('pdf_url') != '로컬파일':
+                        col_ctx, col_btn = st.columns([3, 1])
+                        with col_ctx:
+                            ctx_tab2 = st.text_input("맞춤형 분석 요구사항 (선택)", key=f"ctx_tab2_{p['id']}")
+                        with col_btn:
+                            st.write("") # for alignment
+                            if st.button("🧠 심층 분석 실행", key=f"ana_tab2_{p['id']}", use_container_width=True):
+                                if not api_key: st.error("API 키가 필요합니다.")
+                                else:
+                                    with st.spinner("정밀 분석 중..."):
+                                        try:
+                                            res_text = analyze_paper_with_gemini(api_key, selected_model, p['pdf_url'], ctx_tab2)
+                                            p['analysis_result'] = res_text
+                                            save_paper_to_db(st.session_state.username, p)
+                                            st.rerun()
+                                        except ValueError as e:
+                                            err_msg = str(e)
+                                            if err_msg.startswith("RATE_LIMIT"):
+                                                st.error(f"🚨 **API 사용량 초과 (Rate Limit)**\n\n현재 무료 한도를 초과했습니다. 잠시 후 다시 시도해주세요.\n\n*(상세 원인: {err_msg})*")
+                                            else:
+                                                st.error(f"🚨 분석 중 오류가 발생했습니다: {err_msg}")
                     
                     c1, c2, c3 = st.columns([6, 2, 2])
                     if p.get('pdf_url') != '로컬파일': 
