@@ -711,12 +711,12 @@ else:
             # 📋 카테고리 필터링 및 관리 Bar
             all_existing_cats = list(dict.fromkeys(user_categories + [p.get('category', '미분류') for p in saved_papers]))
             
-            c_filter1, c_filter2 = st.columns([3, 1])
+            c_filter1, c_filter2, c_filter3 = st.columns([2, 1, 1])
             with c_filter1:
                 selected_cat_filter = st.selectbox("📋 카테고리 필터", options=["전체 보기"] + all_existing_cats)
             with c_filter2:
                 st.write("") # alignment spacing
-                with st.popover("➕ 새 카테고리 추가", use_container_width=True):
+                with st.popover("➕ 카테고리 추가", use_container_width=True):
                     new_cat_tab2 = st.text_input("새 카테고리명 입력", key="tab2_new_cat_input", placeholder="예: 초전도체").strip()
                     if st.button("카테고리 생성", key="btn_create_cat_tab2", type="primary", use_container_width=True):
                         if new_cat_tab2 and new_cat_tab2 not in user_categories:
@@ -724,6 +724,48 @@ else:
                             save_user_categories(st.session_state.username, user_categories)
                             st.toast(f"✅ '{new_cat_tab2}' 카테고리가 생성되었습니다!", icon="📋")
                             st.rerun()
+            with c_filter3:
+                st.write("") # alignment spacing
+                with st.popover("🗑️ 카테고리 삭제", use_container_width=True):
+                    st.markdown("#### 🗑️ 카테고리 개별 삭제")
+                    if not user_categories:
+                        st.info("삭제할 사용자 카테고리가 없습니다.")
+                    else:
+                        cat_to_del = st.selectbox("삭제할 카테고리 선택", options=user_categories, key="del_cat_select")
+                        papers_in_cat = [p for p in saved_papers if p.get('category') == cat_to_del]
+                        
+                        if not papers_in_cat:
+                            st.caption("ℹ️ 해당 카테고리에 포함된 논문이 없습니다.")
+                            if st.button("🗑️ 카테고리 삭제 실행", type="primary", key="btn_del_empty_cat", use_container_width=True):
+                                user_categories.remove(cat_to_del)
+                                save_user_categories(st.session_state.username, user_categories)
+                                st.toast(f"✅ '{cat_to_del}' 카테고리가 삭제되었습니다!", icon="🗑️")
+                                st.rerun()
+                        else:
+                            st.warning(f"⚠️ **'{cat_to_del}'** 카테고리에 **{len(papers_in_cat)}편**의 논문이 들어 있습니다.")
+                            del_action = st.radio("논문 처리 방식 선택", options=["🚚 다른 카테고리로 논문 이동", "🗑️ 논문도 함께 DB에서 삭제"], key="del_cat_action")
+                            
+                            other_cats = [c for c in user_categories if c != cat_to_del] + ["미분류"]
+                            if del_action == "🚚 다른 카테고리로 논문 이동":
+                                move_target_cat = st.selectbox("이동할 카테고리 선택", options=other_cats, key="move_target_cat_select")
+                                if st.button(f"🚚 논문 {len(papers_in_cat)}편 이동 후 삭제", type="primary", key="btn_move_del_cat", use_container_width=True):
+                                    for p in papers_in_cat:
+                                        p['category'] = move_target_cat
+                                        save_paper_to_db(st.session_state.username, p)
+                                    if cat_to_del in user_categories:
+                                        user_categories.remove(cat_to_del)
+                                        save_user_categories(st.session_state.username, user_categories)
+                                    st.toast(f"🚚 논문 {len(papers_in_cat)}편을 '{move_target_cat}'(으)로 이동하고 '{cat_to_del}' 카테고리를 삭제했습니다!", icon="✅")
+                                    st.rerun()
+                            else:
+                                if st.button(f"🔥 논문 {len(papers_in_cat)}편 및 카테고리 삭제", type="primary", key="btn_purge_del_cat", use_container_width=True):
+                                    for p in papers_in_cat:
+                                        delete_paper_from_db(st.session_state.username, p['id'])
+                                    if cat_to_del in user_categories:
+                                        user_categories.remove(cat_to_del)
+                                        save_user_categories(st.session_state.username, user_categories)
+                                    st.toast(f"💥 '{cat_to_del}' 카테고리와 논문 {len(papers_in_cat)}편이 영구 삭제되었습니다!", icon="🗑️")
+                                    st.rerun()
 
             if selected_cat_filter != "전체 보기":
                 display_papers = [p for p in saved_papers if p.get('category', '미분류') == selected_cat_filter]
