@@ -214,6 +214,7 @@ def translate_to_ko(text):
     except Exception:
         return text
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def translate_to_en(text):
     if not re.search(r'[가-힣]', text):
         return text
@@ -265,6 +266,7 @@ def parse_smart_query(user_query):
 
     return urllib.parse.quote(final_query), "번역 검색 완료"
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def search_arxiv_papers(user_query, max_results=4):
     import time
     arxiv_query, _ = parse_smart_query(user_query)
