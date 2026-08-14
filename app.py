@@ -93,26 +93,40 @@ def get_saved_papers(username):
     papers_ref = db.collection('users').document(username).collection('papers').order_by('saved_at', direction=firestore.Query.DESCENDING)
     return [doc.to_dict() for doc in papers_ref.stream()]
 
-# --- 💬 채팅 기록 DB 로직 ---
-def save_chat_message(username, role, content):
+# --- 💬 다중 채팅 세션(Session) DB 로직 ---
+def create_chat_session(username):
+    if not db: return None
+    sessions_ref = db.collection('users').document(username).collection('chat_sessions')
+    _, new_ref = sessions_ref.add({
+        'created_at': datetime.now().isoformat()
+    })
+    return new_ref.id
+
+def get_chat_sessions(username):
+    if not db: return []
+    sessions_ref = db.collection('users').document(username).collection('chat_sessions').order_by('created_at', direction=firestore.Query.DESCENDING)
+    return [{'id': doc.id, **doc.to_dict()} for doc in sessions_ref.stream()]
+
+def delete_chat_session(username, session_id):
     if not db: return
-    chat_data = {
+    session_ref = db.collection('users').document(username).collection('chat_sessions').document(session_id)
+    msgs = session_ref.collection('messages').stream()
+    for msg in msgs:
+        msg.reference.delete()
+    session_ref.delete()
+
+def save_chat_message(username, session_id, role, content):
+    if not db: return
+    db.collection('users').document(username).collection('chat_sessions').document(session_id).collection('messages').add({
         'role': role,
         'content': content,
         'timestamp': datetime.now().isoformat()
-    }
-    db.collection('users').document(username).collection('chat_history').add(chat_data)
-    
-def get_chat_history(username):
+    })
+
+def get_chat_history(username, session_id):
     if not db: return []
-    chats_ref = db.collection('users').document(username).collection('chat_history').order_by('timestamp')
-    return [doc.to_dict() for doc in chats_ref.stream()]
-    
-def clear_chat_history(username):
-    if not db: return
-    chats_ref = db.collection('users').document(username).collection('chat_history')
-    for doc in chats_ref.stream():
-        doc.reference.delete()
+    msgs_ref = db.collection('users').document(username).collection('chat_sessions').document(session_id).collection('messages').order_by('timestamp')
+    return [doc.to_dict() for doc in msgs_ref.stream()]
 
 # --- 🌐 번역 및 ArXiv 탐색 로직 ---
 def translate_to_ko(text):
@@ -188,7 +202,6 @@ def search_arxiv_papers(user_query, max_results=4):
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
-        
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
@@ -235,7 +248,7 @@ def chat_with_ai(api_key, model_name, user_query, selected_papers_data, chat_his
                 context_str += f"- 기존 심층분석: {p.get('analysis_result', '분석 안됨')}\n\n"
 
         history_text = ""
-        for msg in chat_history[-6:]: 
+        for msg in chat_history[-8:]: 
             role = '사용자' if msg['role'] == 'user' else 'AI 비서'
             history_text += f"{role}: {msg['content']}\n"
             
@@ -443,68 +456,96 @@ else:
                             st.rerun() 
                 st.markdown("---")
 
-    # ✨ 3번째 탭: AI 챗봇
+    # ✨ 3번째 탭: 다중 세션 AI 챗봇
     with tab3:
-        st.markdown("### 💬 AI 논문 비서")
-        st.caption("저장된 논문들을 기반으로 질문하거나 비교 분석을 요청해보세요! (대화 기록은 영구 저장됩니다)")
+        col_nav, col_chat = st.columns([1, 3])
         
-        # 1. 비교할 논문 선택
-        saved_papers = get_saved_papers(st.session_state.username)
-        paper_options = {p['title']: p for p in saved_papers}
-        
-        selected_titles = st.multiselect(
-            "🧠 대화에 참고할 논문을 선택하세요 (다중 선택 시 비교 분석 가능):",
-            options=list(paper_options.keys())
-        )
-        selected_papers_data = [paper_options[t] for t in selected_titles]
-        
-        st.markdown("---")
-        
-        # 2. 채팅 내역 표시
-        col1, col2 = st.columns([8, 2])
-        with col2:
-            if st.button("🗑️ 대화 기록 초기화", use_container_width=True):
-                clear_chat_history(st.session_state.username)
+        # --- 좌측 패널 (채팅방 관리) ---
+        with col_nav:
+            st.markdown("### 🗂️ 채팅방 목록")
+            if st.button("➕ 새로운 채팅 시작", use_container_width=True, type="primary"):
+                new_session_id = create_chat_session(st.session_state.username)
+                st.session_state.current_chat_session = new_session_id
                 st.rerun()
                 
-        chat_history = get_chat_history(st.session_state.username)
-        
-        # 채팅창 컨테이너 (스크롤 가능)
-        chat_container = st.container(height=500)
-        with chat_container:
-            if not chat_history:
-                st.info("아직 대화 기록이 없습니다. 궁금한 점을 질문해 보세요!")
-            for msg in chat_history:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-        
-        # 3. 채팅 입력창
-        if user_query := st.chat_input("선택한 논문들의 차이점은 뭐야? / 이 알고리즘을 쉽게 설명해줘"):
-            if not api_key or not selected_model:
-                st.error("좌측 사이드바에서 API 키를 입력하고 모델을 선택해주세요.")
+            st.markdown("---")
+            sessions = get_chat_sessions(st.session_state.username)
+            
+            if not sessions:
+                st.info("채팅 내역이 없습니다.")
             else:
-                # 사용자 메시지 화면에 표시 및 DB 저장
-                with chat_container:
-                    with st.chat_message("user"):
-                        st.markdown(user_query)
-                save_chat_message(st.session_state.username, "user", user_query)
+                if "current_chat_session" not in st.session_state or st.session_state.current_chat_session is None:
+                    st.session_state.current_chat_session = sessions[0]['id']
+                    
+                for s in sessions:
+                    c1, c2 = st.columns([8, 2])
+                    t = s.get('created_at', '')
+                    title_text = t[5:16].replace('T', ' ') if t else '새 채팅'
+                    btn_type = "primary" if st.session_state.get('current_chat_session') == s['id'] else "secondary"
+                    
+                    with c1:
+                        if st.button(f"💬 {title_text}", key=f"sess_{s['id']}", use_container_width=True, type=btn_type):
+                            st.session_state.current_chat_session = s['id']
+                            st.rerun()
+                    with c2:
+                        if st.button("❌", key=f"del_{s['id']}", help="삭제"):
+                            delete_chat_session(st.session_state.username, s['id'])
+                            if st.session_state.get('current_chat_session') == s['id']:
+                                st.session_state.current_chat_session = None
+                            st.rerun()
+
+        # --- 우측 패널 (채팅 화면) ---
+        with col_chat:
+            curr_session = st.session_state.get('current_chat_session')
+            if not curr_session:
+                st.markdown("### 💬 AI 논문 비서")
+                st.info("👈 왼쪽에서 '➕ 새로운 채팅 시작'을 누르거나 이전 채팅방을 선택해주세요.")
+            else:
+                st.markdown("### 💬 AI 논문 비서")
+                st.caption("선택한 논문들을 바탕으로 질문하거나 대화를 나누세요!")
                 
-                # AI 답변 생성
-                with chat_container:
-                    with st.chat_message("assistant"):
-                        with st.spinner("AI가 생각 중입니다..."):
-                            # DB에서 최신 채팅 내역 다시 불러오기 (지금 보낸 메시지 포함)
-                            updated_history = get_chat_history(st.session_state.username)
-                            
-                            ai_response = chat_with_ai(
-                                api_key, 
-                                selected_model, 
-                                user_query, 
-                                selected_papers_data, 
-                                updated_history
-                            )
-                            st.markdown(ai_response)
+                saved_papers = get_saved_papers(st.session_state.username)
+                paper_options = {p['title']: p for p in saved_papers}
                 
-                # AI 메시지 DB 저장
-                save_chat_message(st.session_state.username, "assistant", ai_response)
-                st.rerun()
+                selected_titles = st.multiselect(
+                    "🧠 대화에 참고할 논문을 선택하세요 (다중 선택 가능):",
+                    options=list(paper_options.keys()),
+                    key=f"multi_{curr_session}"
+                )
+                selected_papers_data = [paper_options[t] for t in selected_titles]
+                
+                st.markdown("---")
+                
+                chat_history = get_chat_history(st.session_state.username, curr_session)
+                
+                chat_container = st.container(height=500)
+                with chat_container:
+                    if not chat_history:
+                        st.info("새로운 대화를 시작했습니다! 논문을 선택하고 궁금한 점을 질문해 보세요.")
+                    for msg in chat_history:
+                        with st.chat_message(msg["role"]):
+                            st.markdown(msg["content"])
+                
+                if user_query := st.chat_input("여기에 질문을 입력하세요..."):
+                    if not api_key or not selected_model:
+                        st.error("좌측 사이드바에서 API 키를 입력하고 모델을 선택해주세요.")
+                    else:
+                        with chat_container:
+                            with st.chat_message("user"):
+                                st.markdown(user_query)
+                        save_chat_message(st.session_state.username, curr_session, "user", user_query)
+                        
+                        with chat_container:
+                            with st.chat_message("assistant"):
+                                with st.spinner("AI가 생각 중입니다..."):
+                                    updated_history = get_chat_history(st.session_state.username, curr_session)
+                                    ai_response = chat_with_ai(
+                                        api_key, 
+                                        selected_model, 
+                                        user_query, 
+                                        selected_papers_data, 
+                                        updated_history
+                                    )
+                                    st.markdown(ai_response)
+                        save_chat_message(st.session_state.username, curr_session, "assistant", ai_response)
+                        st.rerun()
