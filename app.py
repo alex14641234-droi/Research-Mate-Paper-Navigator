@@ -477,51 +477,6 @@ else:
                 custom_context_search = st.text_input("맞춤형 분석 요구사항 (선택, 엔터키로 검색 가능)")
                 submit_search = st.form_submit_button("🚀 검색", use_container_width=True)
 
-            if submit_search and search_input:
-                with st.spinner("논문을 찾고 있습니다... (잠시만 기다려주세요)"):
-                    try:
-                        results = search_arxiv_papers(search_input)
-                        st.session_state.search_results = results
-                        if not results:
-                            st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
-                    except ValueError as e:
-                        if str(e) == "RATE_LIMIT":
-                            st.error("🚨 ArXiv 서버 접근 제한(Rate Limit)에 걸렸습니다. 1~2분 정도 후에 다시 시도해주세요.")
-                        else:
-                            st.error(f"🚨 ArXiv 서버 응답 지연(Timeout) 또는 접속 오류가 발생했습니다. 잠시 후 다시 시도해 주세요. ({e})")
-                        st.session_state.search_results = []
-
-            if st.session_state.get("search_results"):
-                for idx, paper in enumerate(st.session_state.search_results):
-                    with st.expander(f"📄 {paper['title'][:40]}...", expanded=False):
-                        st.caption(f"✍️ {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
-                        st.write(f"{paper['summary'][:200]}...")
-                        
-                        btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
-                        btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
-                        
-                        # 인용 팝오버 버튼
-                        with st.popover("🔖 인용 정보 (Citation)", use_container_width=True):
-                            apa, bibtex = get_citation(paper)
-                            st.markdown("**APA 포맷**")
-                            st.code(apa, language="text")
-                            st.markdown("**BibTeX 포맷**")
-                            st.code(bibtex, language="bibtex")
-                        
-                        if btn_analyze:
-                            if not api_key: st.error("API 키가 필요합니다.")
-                            else:
-                                with st.spinner("정밀 분석 중..."):
-                                    res_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context_search)
-                                    st.session_state[f"result_{paper['id']}"] = res_text
-                        if f"result_{paper['id']}" in st.session_state:
-                            st.markdown(st.session_state[f"result_{paper['id']}"])
-
-                        if btn_save:
-                            paper_to_save = paper.copy()
-                            paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
-                            save_paper_to_db(st.session_state.username, paper_to_save)
-                            st.success("저장 완료!")
 
         with col_upload:
             st.markdown("### 📤 내 PC에서 PDF 업로드")
@@ -544,6 +499,54 @@ else:
                             save_paper_to_db(st.session_state.username, paper_to_save)
                             st.success(f"'{uploaded_file.name}' 저장 완료!")
                             with st.expander("결과 미리보기", expanded=True): st.markdown(result_text)
+
+        st.markdown("---")
+        if submit_search and search_input:
+            with st.spinner("논문을 찾고 있습니다... (잠시만 기다려주세요)"):
+                try:
+                    results = search_arxiv_papers(search_input)
+                    st.session_state.search_results = results
+                    if not results:
+                        st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
+                except ValueError as e:
+                    if str(e) == "RATE_LIMIT":
+                        st.error("🚨 ArXiv 서버 접근 제한(Rate Limit)에 걸렸습니다. 1~2분 정도 후에 다시 시도해주세요.")
+                    else:
+                        st.error(f"🚨 ArXiv 서버 응답 지연(Timeout) 또는 접속 오류가 발생했습니다. 잠시 후 다시 시도해 주세요. ({e})")
+                    st.session_state.search_results = []
+
+        if st.session_state.get("search_results"):
+            st.markdown("### 📊 ArXiv 검색 결과")
+            for idx, paper in enumerate(st.session_state.search_results):
+                with st.expander(f"📄 {paper['title'][:40]}...", expanded=False):
+                    st.caption(f"✍️ {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
+                    st.write(f"{paper['summary'][:200]}...")
+                    
+                    btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
+                    btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
+                    
+                    # 인용 팝오버 버튼
+                    with st.popover("🔖 인용 정보 (Citation)", use_container_width=True):
+                        apa, bibtex = get_citation(paper)
+                        st.markdown("**APA 포맷**")
+                        st.code(apa, language="text")
+                        st.markdown("**BibTeX 포맷**")
+                        st.code(bibtex, language="bibtex")
+                    
+                    if btn_analyze:
+                        if not api_key: st.error("API 키가 필요합니다.")
+                        else:
+                            with st.spinner("정밀 분석 중..."):
+                                res_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context_search)
+                                st.session_state[f"result_{paper['id']}"] = res_text
+                    if f"result_{paper['id']}" in st.session_state:
+                        st.markdown(st.session_state[f"result_{paper['id']}"])
+
+                    if btn_save:
+                        paper_to_save = paper.copy()
+                        paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
+                        save_paper_to_db(st.session_state.username, paper_to_save)
+                        st.success("저장 완료!")
 
     with tab2:
         st.markdown(f"### 🗄️ {st.session_state.username}님의 연구 논문 아카이브")
