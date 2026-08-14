@@ -653,4 +653,12 @@ else:
                             update_chat_session_title(st.session_state.username, curr_session, new_title)
 
                         with chat_container:
-                            with st.chat_message("user"): st.markdown(final_quer
+                            with st.chat_message("user"): st.markdown(final_query)
+                        save_chat_message(st.session_state.username, curr_session, "user", final_query)
+                        
+                        with chat_container:
+                            with st.chat_message("assistant"):
+                                response_stream = chat_with_ai_stream(api_key, selected_model, final_query, selected_papers_data, get_chat_history(st.session_state.username, curr_session))
+                                # 실시간 스트리밍 출력!
+                                ai_response = st.write_stream(response_stream)
+                        save_chat_message(st.session_state.username, curr_session, "assistant", ai_response)
