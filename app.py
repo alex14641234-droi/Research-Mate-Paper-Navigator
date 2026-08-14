@@ -284,54 +284,78 @@ def parse_year_range(user_query):
     return None, None, None
 
 def parse_smart_query(user_query):
-    q = user_query.strip().lower()
+    q = user_query.strip()
+    q_lower = q.lower()
 
+    # 1. Author Intent Detection ("~교수님", "~교수", "~저자", "author:", "by ~")
+    author_match = re.search(r'([가-힣]{2,4}|[A-Za-z\s]+)\s*(교수님|교수|저자|박사님|박사|연구원|작가)', q)
+    author_query = None
+    author_ko = None
+    if author_match:
+        raw_author = author_match.group(1).strip()
+        if re.search(r'[가-힣]', raw_author):
+            author_ko = raw_author
+            translated_author = translate_to_en(raw_author).strip()
+            # Generate common Romanized variants for Korean authors (e.g. Homin Kim, Ho-Min Kim, Kim)
+            author_query = f'au:"{translated_author}" OR all:"{translated_author}"'
+        else:
+            author_query = f'au:"{raw_author}" OR all:"{raw_author}"'
+
+    # 2. Year / Era Intent Detection
     target_years, start_dt, end_dt = parse_year_range(user_query)
 
-    # Default to 'relevance' (연도 상관없이 검색어/상황과 가장 관련성이 높은 대표 논문 우선)
-    # Only switch to 'submittedDate' if the user explicitly requests '최신', '최근', 'recent', or 'latest'
-    if any(w in q for w in ["최신", "최근", "recent", "latest", "최근순", "최신순"]):
+    # 3. Sort Order
+    if any(w in q_lower for w in ["최신", "최근", "recent", "latest", "최근순", "최신순"]):
         sort_by = "submittedDate"
     else:
         sort_by = "relevance"
 
-    match = re.search(r'\d{4}\.\d{4,5}', q)
-    if match: return f"id:{match.group(0)}", sort_by, target_years
+    # 4. ArXiv ID match
+    match = re.search(r'\d{4}\.\d{4,5}', q_lower)
+    if match: return f"id:{match.group(0)}", sort_by, target_years, author_ko
+
+    # 5. Clean Topic Keyword Extraction
+    clean_q = q
+    if author_match:
+        clean_q = clean_q.replace(author_match.group(0), "")
+
+    clean_q = re.sub(r'\b(19\d{2}|20\d{2})\b', '', clean_q)
+    stop_words = [
+        "추천해줘", "추천", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", 
+        "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은",
+        "년도", "년", "기준", "년대", "초반", "중반", "후반", "교수님", "교수", "저자", "작성자", "관련"
+    ]
+    for word in stop_words:
+        clean_q = clean_q.replace(word, "")
+    clean_q = clean_q.strip()
+
+    search_terms = []
+    if author_query:
+        search_terms.append(f"({author_query})")
 
     keyword_map = {
         "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
         "생성형": 'all:"generative model"', "비전": 'all:"computer vision"', "로봇": 'all:"robotics"',
-        "자율주행": 'all:"autonomous driving"', "이슈": 'all:"deep learning"', "핫한": 'all:"deep learning"'
+        "자율주행": 'all:"autonomous driving"'
     }
     
-    search_terms = []
     for ko_word, en_query in keyword_map.items():
-        if ko_word in q: search_terms.append(f"({en_query})")
+        if ko_word in clean_q.lower():
+            search_terms.append(f"({en_query})")
             
-    if any(w in q for w in ["ai", "인공지능", "llm", "머신러닝", "딥러닝"]):
+    if any(w in clean_q.lower() for w in ["ai", "인공지능", "llm", "머신러닝", "딥러닝"]):
         search_terms.append('(all:"artificial intelligence" OR all:"large language model")')
         
     if search_terms:
         final_query = " AND ".join(search_terms)
     else:
-        clean = re.sub(r'[^\w\s가-힣]', '', q)
-        clean = re.sub(r'\b(19\d{2}|20\d{2})\b', '', clean)
-        stop_words = [
-            "추천해줘", "추천", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", 
-            "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은",
-            "년도", "년", "기준", "년대", "초반", "중반", "후반"
-        ]
-        for word in stop_words:
-            clean = clean.replace(word, "")
-        clean = clean.strip()
-        
-        if not clean or len(clean) < 2:
-            clean = "deep learning"
+        if not clean_q or len(clean_q) < 2:
+            clean_q = "deep learning"
 
-        if re.search(r'[가-힣]', clean):
-            en_query = translate_to_en(clean)
+        if re.search(r'[가-힣]', clean_q):
+            en_query = translate_to_en(clean_q)
         else:
-            en_query = clean
+            en_query = clean_q
 
         en_clean = re.sub(r'[^\w\s]', '', en_query).strip()
         if not en_clean or en_clean.lower() in ["easy", "easy one", "easy only one", "one", "simple"]:
@@ -339,11 +363,11 @@ def parse_smart_query(user_query):
 
         final_query = f'all:{en_clean}'
 
-    return final_query, sort_by, target_years
+    return final_query, sort_by, target_years, author_ko
 
 def search_arxiv_papers(user_query, max_results=5):
     import time
-    raw_query, sort_by, target_years = parse_smart_query(user_query)
+    raw_query, sort_by, target_years, author_ko = parse_smart_query(user_query)
     encoded_query = urllib.parse.quote(raw_query)
     try:
         # Fetch 50 candidate papers across years
@@ -388,14 +412,26 @@ def search_arxiv_papers(user_query, max_results=5):
                 "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
 
-        # Strict Python Year Filter / Sort!
+        # 1. Author Filter
+        if author_ko:
+            translated_author = translate_to_en(author_ko).lower()
+            author_tokens = [w for w in re.split(r'\s+', translated_author) if len(w) > 1]
+            
+            author_matches = []
+            for p in papers:
+                p_authors_lower = p['authors'].lower()
+                if any(tok in p_authors_lower for tok in author_tokens):
+                    author_matches.append(p)
+            
+            if author_matches:
+                papers = author_matches
+
+        # 2. Strict Python Year Filter / Sort!
         if target_years:
-            # 1. Exact match papers published in target_years
             strict_matches = [p for p in papers if any(p['published'].startswith(y) for y in target_years)]
             if strict_matches:
                 return strict_matches[:max_results]
             
-            # 2. Sort by closeness to the requested target year
             ref_year = int(target_years[0])
             papers.sort(key=lambda p: abs(int(p['published'][:4]) - ref_year))
             return papers[:max_results]
@@ -1138,4 +1174,3 @@ else:
                                 # 실시간 스트리밍 출력!
                                 ai_response = st.write_stream(response_stream)
                         save_chat_message(st.session_state.username, curr_session, "assistant", ai_response)
-
