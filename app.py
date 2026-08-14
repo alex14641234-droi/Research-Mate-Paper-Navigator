@@ -516,6 +516,14 @@ else:
                 
                 st.markdown("---")
                 
+                # 입력창을 위로 이동 (form 사용)
+                with st.form(key=f"chat_form_{curr_session}", clear_on_submit=True):
+                    c1, c2 = st.columns([9, 1])
+                    with c1:
+                        user_query = st.text_input("질문 입력", placeholder="선택한 논문들의 차이점은 뭐야? / 이 알고리즘을 쉽게 설명해줘", label_visibility="collapsed")
+                    with c2:
+                        submit_chat = st.form_submit_button("전송 🚀", use_container_width=True)
+                
                 chat_history = get_chat_history(st.session_state.username, curr_session)
                 
                 chat_container = st.container(height=500)
@@ -526,7 +534,7 @@ else:
                         with st.chat_message(msg["role"]):
                             st.markdown(msg["content"])
                 
-                if user_query := st.chat_input("여기에 질문을 입력하세요..."):
+                if submit_chat and user_query:
                     if not api_key or not selected_model:
                         st.error("좌측 사이드바에서 API 키를 입력하고 모델을 선택해주세요.")
                     else:
