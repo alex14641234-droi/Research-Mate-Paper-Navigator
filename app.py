@@ -501,11 +501,11 @@ else:
                                 else:
                                     st.error(f"🚨 분석 중 오류가 발생했습니다: {err_msg}")
 
-        st.markdown("---")
-        if submit_search and search_input:
+        query_to_search = search_input.strip() or custom_context_search.strip()
+        if submit_search and query_to_search:
             with st.spinner("논문을 찾고 있습니다... (잠시만 기다려주세요)"):
                 try:
-                    results = search_arxiv_papers(search_input)
+                    results = search_arxiv_papers(query_to_search)
                     st.session_state.search_results = results
                     if not results:
                         st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
