@@ -382,8 +382,8 @@ def search_arxiv_papers(user_query, max_results=5):
     encoded_query = urllib.parse.quote(raw_query)
     notice_msg = None
     try:
-        # Fetch 50 candidate papers across years
-        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=50&sortBy={sort_by}&sortOrder=descending"
+        # Fetch 200 candidate papers across years
+        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=200&sortBy={sort_by}&sortOrder=descending"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         for attempt in range(3):
@@ -437,7 +437,7 @@ def search_arxiv_papers(user_query, max_results=5):
             
             papers = author_matches
             if not papers:
-                notice_msg = f"⚠️ ArXiv에 '{author_ko}' 저자(또는 연관 검색어)로 등록된 논문을 찾을 수 없습니다."
+                notice_msg = f"⚠️ ArXiv 상위 검색 결과에서 '{author_ko}' 저자(또는 연관 검색어)로 등록된 논문을 찾을 수 없습니다."
 
         # 2. Strict Python Year Filter / Sort!
         if target_years:
@@ -447,6 +447,13 @@ def search_arxiv_papers(user_query, max_results=5):
             
             ref_year = int(target_years[0])
             papers.sort(key=lambda p: abs(int(p['published'][:4]) - ref_year))
+            
+            y_msg = f"요청하신 연도({target_years[0]}년 등)의 논문이 상위 검색 결과에 부족하여, 가장 연도가 가까운 논문으로 대체 안내합니다."
+            if notice_msg:
+                notice_msg += f" 또한, {y_msg}"
+            else:
+                notice_msg = f"💡 {y_msg}"
+                
             return papers[:max_results], notice_msg
 
         return papers[:max_results], notice_msg
