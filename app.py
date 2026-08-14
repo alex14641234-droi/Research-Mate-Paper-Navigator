@@ -130,6 +130,25 @@ def get_saved_papers(username):
     papers_ref = db.collection('users').document(username).collection('papers').order_by('saved_at', direction=firestore.Query.DESCENDING)
     return [doc.to_dict() for doc in papers_ref.stream()]
 
+def get_user_categories(username):
+    default_cats = ["인공지능", "컴퓨터 비전", "자연어 처리", "로봇공학", "의학/생명", "기타"]
+    if not db: return default_cats
+    try:
+        doc = db.collection('users').document(username).collection('settings').document('categories').get()
+        if doc.exists and 'list' in doc.to_dict():
+            return doc.to_dict()['list']
+    except Exception:
+        pass
+    return default_cats
+
+def save_user_categories(username, categories_list):
+    if not db: return False
+    try:
+        db.collection('users').document(username).collection('settings').document('categories').set({'list': categories_list})
+        return True
+    except Exception:
+        return False
+
 # --- 💬 다중 채팅 세션(Session) DB 로직 ---
 def create_chat_session(username):
     if not db: return None
@@ -510,6 +529,7 @@ else:
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
+    user_categories = get_user_categories(st.session_state.username)
     tab1, tab2, tab3 = st.tabs(["🔍 논문 탐색 및 업로드", "🗄️ 내 연구 DB (My Library)", "💬 AI 논문 비서"])
 
     with tab1:
@@ -526,6 +546,7 @@ else:
             st.markdown("### 📤 내 PC에서 PDF 업로드")
             uploaded_file = st.file_uploader("유료/비공개 논문 PDF 업로드", type=["pdf"])
             custom_context_upload = st.text_area("분석 시 집중할 내용 (선택)", key="ctx_upload")
+            upload_cat = st.selectbox("📂 저장할 카테고리 선택", options=user_categories, key="upload_cat_sel")
             
             if uploaded_file is not None:
                 if st.button("🧠 업로드한 논문 분석 및 저장", type="primary", use_container_width=True):
@@ -539,10 +560,11 @@ else:
                                 paper_to_save = {
                                     "id": f"local_{fake_id}", "title": uploaded_file.name, "en_title": uploaded_file.name,
                                     "authors": "로컬 업로드 논문", "published": datetime.now().strftime("%Y-%m-%d"),
-                                    "summary": "로컬 PDF 분석 데이터", "pdf_url": "로컬파일", "analysis_result": result_text
+                                    "summary": "로컬 PDF 분석 데이터", "pdf_url": "로컬파일", "analysis_result": result_text,
+                                    "category": upload_cat
                                 }
                                 save_paper_to_db(st.session_state.username, paper_to_save)
-                                st.success(f"'{uploaded_file.name}' 저장 완료!")
+                                st.success(f"'{uploaded_file.name}' [{upload_cat}] 저장 완료!")
                                 with st.expander("결과 미리보기", expanded=True): st.markdown(result_text)
                             except ValueError as e:
                                 err_msg = str(e)
@@ -574,6 +596,7 @@ else:
                     st.write(f"{paper['summary'][:200]}...")
                     
                     btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
+                    arxiv_save_cat = st.selectbox("📂 저장 카테고리 선택", options=user_categories, key=f"cat_arxiv_{paper['id']}")
                     btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
                     
                     # 인용 팝오버 버튼
@@ -603,8 +626,9 @@ else:
                     if btn_save:
                         paper_to_save = paper.copy()
                         paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
+                        paper_to_save['category'] = arxiv_save_cat
                         save_paper_to_db(st.session_state.username, paper_to_save)
-                        st.success("저장 완료!")
+                        st.success(f"[{arxiv_save_cat}] 카테고리에 저장 완료!")
 
     with tab2:
         st.markdown(f"### 🗄️ {st.session_state.username}님의 연구 논문 아카이브")
@@ -653,12 +677,48 @@ else:
                     st.markdown("---")
                     st.markdown(st.session_state["paper_compare_result"])
 
+            # 📂 카테고리 필터링 및 관리 Bar
+            all_existing_cats = list(dict.fromkeys(user_categories + [p.get('category', '미분류') for p in saved_papers]))
+            
+            c_cat1, c_cat2 = st.columns([3, 1])
+            with c_cat1:
+                selected_cat_filter = st.selectbox("📂 카테고리 폴더 필터", options=["전체 보기"] + all_existing_cats)
+            with c_cat2:
+                st.write("") # spacing
+                with st.popover("➕ 새 카테고리 추가", use_container_width=True):
+                    new_cat_name = st.text_input("새 카테고리명 입력")
+                    if st.button("카테고리 생성", use_container_width=True):
+                        if new_cat_name and new_cat_name not in user_categories:
+                            user_categories.append(new_cat_name)
+                            save_user_categories(st.session_state.username, user_categories)
+                            st.success(f"'{new_cat_name}' 생성 완료!")
+                            st.rerun()
+
+            if selected_cat_filter != "전체 보기":
+                display_papers = [p for p in saved_papers if p.get('category', '미분류') == selected_cat_filter]
+            else:
+                display_papers = saved_papers
+
             st.markdown("---")
-            st.markdown("#### 📄 아카이브 논문 목록")
-            for p in reversed(saved_papers):
+            st.markdown(f"#### 📄 아카이브 논문 목록 ({selected_cat_filter}: {len(display_papers)}편)")
+            if not display_papers:
+                st.warning(f"'{selected_cat_filter}' 카테고리에 해당하는 논문이 없습니다.")
+            for p in reversed(display_papers):
                 with st.container():
-                    st.markdown(f"#### 📌 {p['title']}")
-                    st.caption(f"🆔 {p['id']} | 💾 {p['saved_at']}")
+                    col_p_title, col_p_cat = st.columns([3, 1])
+                    with col_p_title:
+                        st.markdown(f"#### 📌 {p['title']}")
+                        p_cat = p.get('category', '미분류')
+                        st.caption(f"🏷️ **카테고리**: `{p_cat}` | 🆔 {p['id']} | 💾 {p['saved_at']}")
+                    with col_p_cat:
+                        cur_cat = p.get('category', '미분류')
+                        cat_idx = all_existing_cats.index(cur_cat) if cur_cat in all_existing_cats else 0
+                        new_p_cat = st.selectbox("📁 카테고리 변경", options=all_existing_cats, index=cat_idx, key=f"cat_mod_{p['id']}")
+                        if new_p_cat != cur_cat:
+                            p['category'] = new_p_cat
+                            save_paper_to_db(st.session_state.username, p)
+                            st.rerun()
+
                     has_analysis = p.get('analysis_result') not in ["분석 안됨", "분석 없음", None]
                     with st.expander("🧠 AI 심층 분석 결과", expanded=has_analysis):
                         st.markdown(p.get('analysis_result', '분석 없음'))
