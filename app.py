@@ -585,14 +585,6 @@ else:
                 with bc3: 
                     if st.button("⚠️ 한계점 파악해 줘", use_container_width=True): auto_query = "선택된 논문들이 공통적으로 가진 한계점이나, 각 논문의 아쉬운 점을 찾아 줘."
                 
-                # --- 입력창 ---
-                with st.form(key=f"chat_form_{curr_session}", clear_on_submit=True):
-                    c1, c2 = st.columns([9, 1])
-                    with c1:
-                        user_query = st.text_input("질문 입력", placeholder="선택한 논문들의 차이점은 뭐야?", label_visibility="collapsed")
-                    with c2:
-                        submit_chat = st.form_submit_button("전송 🚀", use_container_width=True)
-                
                 chat_history = get_chat_history(st.session_state.username, curr_session)
                 
                 chat_container = st.container(height=400)
@@ -603,8 +595,11 @@ else:
                         with st.chat_message(msg["role"]):
                             st.markdown(msg["content"])
                 
+                # --- 하단 입력창 ---
+                user_query = st.chat_input("여기에 질문을 입력하세요...")
+                
                 # 최종 전송 로직 (수동 입력 또는 자동 버튼)
-                final_query = auto_query if auto_query else (user_query if submit_chat else None)
+                final_query = auto_query if auto_query else user_query
 
                 if final_query:
                     if not api_key or not selected_model:
