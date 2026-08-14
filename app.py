@@ -228,32 +228,58 @@ def translate_to_en(text):
         return text
 
 def parse_smart_query(user_query):
-    q = user_query.strip()
+    q = user_query.strip().lower()
     match = re.search(r'\d{4}\.\d{4,5}', q)
     if match: return f"id:{match.group(0)}", f"ArXiv ID: {match.group(0)}"
 
-    clean = re.sub(r'[^\w\s가-힣]', '', q)
-    for word in ["추천해줘", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", "최신", "논문"]:
-        clean = clean.replace(word, "")
-    clean = clean.strip()
+    keyword_map = {
+        "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
+        "생성형": 'all:"generative model"', "비전": 'all:"computer vision"', "로봇": 'all:"robotics"',
+        "자율주행": 'all:"autonomous driving"', "이슈": 'all:"deep learning"', "핫한": 'all:"deep learning"'
+    }
     
-    if not clean:
-        clean = "deep learning"
-
-    if re.search(r'[가-힣]', clean):
-        en_query = translate_to_en(clean)
+    search_terms = []
+    for ko_word, en_query in keyword_map.items():
+        if ko_word in q: search_terms.append(f"({en_query})")
+            
+    if any(w in q for w in ["ai", "인공지능", "llm", "머신러닝", "딥러닝"]):
+        search_terms.append('(all:"artificial intelligence" OR all:"large language model")')
+        
+    if search_terms:
+        final_query = " AND ".join(search_terms)
     else:
-        en_query = clean
+        clean = re.sub(r'[^\w\s가-힣]', '', q)
+        for word in ["추천해줘", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", "최신", "논문"]:
+            clean = clean.replace(word, "")
+        clean = clean.strip()
+        
+        if not clean:
+            clean = "deep learning"
 
-    final_query = f'all:"{en_query}"'
+        if re.search(r'[가-힣]', clean):
+            en_query = translate_to_en(clean)
+        else:
+            en_query = clean
+
+        final_query = f'all:"{en_query}"'
+
     return urllib.parse.quote(final_query), "번역 검색 완료"
 
 def search_arxiv_papers(user_query, max_results=4):
+    import time
     arxiv_query, _ = parse_smart_query(user_query)
     try:
         url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy=relevance&sortOrder=descending"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        res = requests.get(url, headers=headers, timeout=10)
+        
+        for attempt in range(3):
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 429:
+                time.sleep(3)
+                continue
+            res.raise_for_status()
+            break
+            
         root = ET.fromstring(res.text)
         papers = []
         for entry in root.findall('{http://www.w3.org/2005/Atom}entry'):
