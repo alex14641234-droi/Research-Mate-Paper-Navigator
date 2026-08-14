@@ -402,12 +402,8 @@ def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, c
 # --- 💻 메인 앱 & UI ---
 
 if "logged_in" not in st.session_state:
-    if "user" in st.query_params:
-        st.session_state.logged_in = True
-        st.session_state.username = st.query_params["user"]
-    else:
-        st.session_state.logged_in = False
-        st.session_state.username = ""
+    st.session_state.logged_in = False
+    st.session_state.username = ""
 
 if not st.session_state.logged_in:
     st.title("🔐 Research Mate 로그인")
@@ -424,7 +420,6 @@ if not st.session_state.logged_in:
                     if login(login_id, login_pw):
                         st.session_state.logged_in = True
                         st.session_state.username = login_id
-                        st.query_params["user"] = login_id
                         st.rerun()
                     else: st.error("정보가 올바르지 않습니다.")
         with tab_signup:
@@ -440,7 +435,6 @@ else:
         if st.button("로그아웃"):
             st.session_state.logged_in = False
             st.session_state.username = ""
-            if "user" in st.query_params: del st.query_params["user"]
             st.rerun()
             
         st.markdown("---")
