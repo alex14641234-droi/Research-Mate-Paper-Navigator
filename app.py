@@ -89,12 +89,20 @@ if "shared_chat" in st.query_params and "shared_user" in st.query_params:
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def signup(username, password):
+def signup(username, password, api_key=""):
     if not db: return False
     doc_ref = db.collection('users').document(username)
     if doc_ref.get().exists: return False
-    doc_ref.set({'password': hash_password(password), 'api_key': ""})
+    doc_ref.set({'password': hash_password(password), 'api_key': api_key.strip()})
     return True
+
+def update_password(username, new_password):
+    if not db: return False
+    try:
+        db.collection('users').document(username).update({'password': hash_password(new_password)})
+        return True
+    except Exception:
+        return False
 
 def login(username, password):
     if not db: return False
@@ -106,7 +114,7 @@ def login(username, password):
 
 def save_api_key(username, api_key):
     if not db: return
-    db.collection('users').document(username).update({'api_key': api_key})
+    db.collection('users').document(username).update({'api_key': api_key.strip()})
 
 def get_api_key(username):
     if not db: return ""
@@ -199,12 +207,13 @@ def get_chat_history(username, session_id):
 def generate_chat_title(api_key, model_name, first_query):
     try:
         genai.configure(api_key=api_key)
-        prompt = f"다음 사용자의 질문을 바탕으로 3~5단어 길이의 짧고 직관적인 채팅방 제목을 만들어주세요. 따옴표나 특수기호 없이 핵심 제목만 출력하세요.\n\n질문 내용: {first_query}"
         model = genai.GenerativeModel(model_name)
-        res = model.generate_content(prompt, generation_config={"temperature": 0.3})
-        return res.text.strip().replace('"', '').replace("'", "")
+        prompt = f"다음 사용자 질문을 보고 3~5단어 내외의 아주 짧고 핵심적인 대화 방 제목(제목만 출력, 이모지 포함)을 만들어주세요: '{first_query}'"
+        res = model.generate_content(prompt)
+        title = res.text.strip().replace('"', '').replace("'", "")
+        return title[:20]
     except Exception:
-        return "새 대화"
+        return first_query[:15]
 
 def export_chat_as_markdown(chat_history, session_title):
     md_content = f"# 💬 {session_title}\n\n*다운로드 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n---\n\n"
@@ -225,6 +234,7 @@ def get_citation(paper):
 
 # --- 🌐 번역 및 ArXiv 탐색 로직 ---
 def translate_to_ko(text):
+    if not text.strip(): return text
     try:
         url = "https://translate.googleapis.com/translate_a/single"
         params = {"client": "gtx", "sl": "en", "tl": "ko", "dt": "t", "q": text}
@@ -237,6 +247,7 @@ def translate_to_ko(text):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def translate_to_en(text):
+    if not text.strip(): return text
     if not re.search(r'[가-힣]', text):
         return text
     try:
@@ -369,6 +380,7 @@ def search_arxiv_papers(user_query, max_results=5):
     import time
     raw_query, sort_by, target_years, author_ko = parse_smart_query(user_query)
     encoded_query = urllib.parse.quote(raw_query)
+    notice_msg = None
     try:
         # Fetch 50 candidate papers across years
         url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=50&sortBy={sort_by}&sortOrder=descending"
@@ -412,7 +424,7 @@ def search_arxiv_papers(user_query, max_results=5):
                 "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
 
-        # 1. Author Filter
+        # 1. Author Filter / Topic Fallback
         if author_ko:
             translated_author = translate_to_en(author_ko).lower()
             author_tokens = [w for w in re.split(r'\s+', translated_author) if len(w) > 1]
@@ -425,6 +437,29 @@ def search_arxiv_papers(user_query, max_results=5):
             
             if author_matches:
                 papers = author_matches
+            else:
+                # If author query returned 0 matches, retry fetching topic-only papers so user NEVER gets 0 results!
+                topic_q = re.sub(r'\(au:[^)]+\)\s*AND\s*', '', raw_query)
+                topic_q = re.sub(r'\s*AND\s*\(au:[^)]+\)', '', topic_q)
+                if topic_q and topic_q != raw_query:
+                    fb_url = f"https://export.arxiv.org/api/query?search_query={urllib.parse.quote(topic_q)}&start=0&max_results=30&sortBy={sort_by}&sortOrder=descending"
+                    fb_res = requests.get(fb_url, headers=headers, timeout=15)
+                    fb_root = ET.fromstring(fb_res.text)
+                    fb_papers = []
+                    for entry in fb_root.findall('{http://www.w3.org/2005/Atom}entry'):
+                        t = entry.find('{http://www.w3.org/2005/Atom}title').text.replace('\n', ' ').strip()
+                        s = entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip()
+                        r_id = entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]
+                        c_id = re.sub(r'v\d+$', '', r_id)
+                        fb_papers.append({
+                            "id": c_id, "title": translate_to_ko(t), "en_title": t,
+                            "authors": ", ".join([a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')][:3]),
+                            "published": entry.find('{http://www.w3.org/2005/Atom}published').text[:10],
+                            "summary": translate_to_ko(s), "pdf_url": f"https://arxiv.org/pdf/{c_id}.pdf"
+                        })
+                    if fb_papers:
+                        papers = fb_papers
+                        notice_msg = f"💡 '{author_ko} 교수님/저자'의 ArXiv 직접 등록 논문 외에, 요청하신 주제와 가장 관련성이 높은 주요 학술 논문을 안내해 드립니다."
 
         # 2. Strict Python Year Filter / Sort!
         if target_years:
@@ -635,42 +670,44 @@ if not st.session_state.logged_in:
             with st.form(key="signup_form"):
                 signup_id = st.text_input("새 아이디 (ID)")
                 signup_pw = st.text_input("새 비밀번호 (Password)", type="password")
+                signup_key = st.text_input("Gemini API Key (선택)", type="password", help="Google AI Studio(aistudio.google.com)에서 발급받은 API 키를 입력하시면 내 계정에 저장됩니다.")
                 if st.form_submit_button("회원가입", use_container_width=True):
-                    if signup(signup_id, signup_pw): st.success("회원가입 성공! 로그인해주세요.")
+                    if signup(signup_id, signup_pw, signup_key): st.success("🎉 회원가입 성공! 로그인해주세요.")
                     else: st.error("이미 존재하는 아이디입니다.")
 else:
     with st.sidebar:
         st.markdown(f"### 👤 {st.session_state.username}님 환영합니다!")
-        if st.button("로그아웃"):
-            st.session_state.logged_in = False
-            st.session_state.username = ""
-            st.rerun()
-            
-        st.markdown("---")
-        st.markdown("### 🔑 Google AI Studio 설정")
+        
         system_api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
         saved_api_key = get_api_key(st.session_state.username) or system_api_key
-        api_key_input = st.text_input("Gemini API Key (선택)", type="password", value=saved_api_key, help="비워두시면 시스템 기본 API 키가 사용됩니다.")
-        api_key = api_key_input.strip() if api_key_input.strip() else system_api_key
+        api_key = saved_api_key.strip()
         
-        if api_key_input and api_key_input != saved_api_key:
-            save_api_key(st.session_state.username, api_key_input)
-        
+        if api_key:
+            st.success("🟢 Gemini API 연결됨")
+        else:
+            st.warning("⚠️ API 키가 등록되지 않았습니다.")
+
         selected_model = None
         if api_key:
             with st.spinner("AI 모델 불러오는 중..."):
                 available_models = get_available_models(api_key)
             if available_models:
-                st.markdown("---")
-                selected_model = st.selectbox("⚙️ AI 모델", options=available_models, index=0)
+                selected_model = st.selectbox("⚙️ AI 모델 선택", options=available_models, index=0)
             else: st.error("API 키 오류")
+            
+        st.caption("💡 API 키 수정 및 계정 정보 관리는 [⚙️ 회원 설정] 탭에서 하실 수 있습니다.")
+        st.markdown("---")
+        if st.button("🚪 로그아웃", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.username = ""
+            st.rerun()
 
     st.title("🔬 Research Mate")
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
     user_categories = get_user_categories(st.session_state.username)
-    tab1, tab2, tab3 = st.tabs(["🔍 논문 탐색 및 업로드", "🗄️ 내 연구 DB (My Library)", "💬 AI 논문 비서"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🔍 논문 탐색 및 업로드", "🗄️ 내 연구 DB (My Library)", "💬 AI 논문 비서", "⚙️ 회원 설정"])
 
     with tab1:
         col_search, col_upload = st.columns([1, 1])
@@ -737,8 +774,9 @@ else:
 
             with st.spinner(f"'{query_to_search}' 관점으로 맞춤 논문을 탐색 중입니다..."):
                 try:
-                    results = search_arxiv_papers(query_to_search)
+                    results, notice_msg = search_arxiv_papers(query_to_search)
                     st.session_state.search_results = results
+                    st.session_state.search_notice = notice_msg
                     if not results:
                         st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
                 except ValueError as e:
@@ -747,9 +785,12 @@ else:
                     else:
                         st.error(f"🚨 ArXiv 서버 응답 지연(Timeout) 또는 접속 오류가 발생했습니다. 잠시 후 다시 시도해 주세요. ({e})")
                     st.session_state.search_results = []
+                    st.session_state.search_notice = None
 
         if st.session_state.get("search_results"):
             st.markdown("### 📊 ArXiv 검색 결과")
+            if st.session_state.get("search_notice"):
+                st.info(st.session_state.search_notice)
             for idx, paper in enumerate(st.session_state.search_results):
                 with st.expander(f"📄 {paper['title'][:40]}...", expanded=False):
                     st.caption(f"✍️ {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
@@ -1174,3 +1215,46 @@ else:
                                 # 실시간 스트리밍 출력!
                                 ai_response = st.write_stream(response_stream)
                         save_chat_message(st.session_state.username, curr_session, "assistant", ai_response)
+
+    with tab4:
+        st.markdown("### ⚙️ 회원 설정 및 계정 관리")
+        st.caption("API 키 관리 및 비밀번호 변경 등 내 계정 정보를 설정합니다.")
+        st.markdown("---")
+        
+        col_acc1, col_acc2 = st.columns([1, 1])
+        with col_acc1:
+            st.markdown("#### 🔑 Google Gemini API 키 설정")
+            current_key = get_api_key(st.session_state.username)
+            if current_key:
+                masked_key = current_key[:6] + "****************" if len(current_key) > 6 else "******"
+                st.info(f"🔒 **현재 등록된 API 키**: `{masked_key}`")
+            else:
+                st.warning("현재 저장된 개인 API 키가 없습니다. (시스템 기본 키 사용 중)")
+                
+            with st.form(key="update_api_key_form"):
+                new_key_input = st.text_input("새 Gemini API Key 입력", type="password", help="Google AI Studio(aistudio.google.com)에서 발급받은 API 키를 입력하세요.")
+                if st.form_submit_button("💾 API 키 저장 및 업데이트", type="primary", use_container_width=True):
+                    if new_key_input.strip():
+                        save_api_key(st.session_state.username, new_key_input)
+                        st.toast("🎉 API 키가 성공적으로 저장되었습니다!", icon="🔑")
+                        st.success("✅ API 키가 성공적으로 업데이트되었습니다.")
+                        st.rerun()
+                    else:
+                        st.error("올바른 API 키를 입력해주세요.")
+
+        with col_acc2:
+            st.markdown("#### 🔒 비밀번호 변경")
+            with st.form(key="update_pw_form"):
+                new_pw_input = st.text_input("새 비밀번호 입력", type="password")
+                confirm_pw_input = st.text_input("새 비밀번호 확인", type="password")
+                if st.form_submit_button("💾 비밀번호 변경", type="primary", use_container_width=True):
+                    if not new_pw_input.strip():
+                        st.error("새 비밀번호를 입력해주세요.")
+                    elif new_pw_input != confirm_pw_input:
+                        st.error("비밀번호 확인이 일치하지 않습니다.")
+                    else:
+                        if update_password(st.session_state.username, new_pw_input):
+                            st.toast("🎉 비밀번호가 변경되었습니다!", icon="🔒")
+                            st.success("✅ 비밀번호가 성공적으로 변경되었습니다.")
+                        else:
+                            st.error("비밀번호 변경 중 오류가 발생했습니다.")
