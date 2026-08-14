@@ -252,20 +252,19 @@ def translate_to_en(text):
 def parse_smart_query(user_query):
     q = user_query.strip().lower()
 
-    # Determine sorting: Default to 'submittedDate' for fresh/recent papers unless relevance is explicitly requested
-    sort_by = "submittedDate"
-    if "관련성" in q or "relevance" in q:
+    # Detect target year across full ArXiv history (1991~2026, e.g. 1998, 2024, 2020, etc.)
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', q)
+    target_year = year_match.group(1) if year_match else None
+
+    # Default to 'relevance' (1991년부터 최신까지 연도 상관없이 가장 관련성이 높은 대표 논문 우선 탐색)
+    # Only switch to 'submittedDate' if the user explicitly requests '최신', '최근', 'recent', or 'latest'
+    if any(w in q for w in ["최신", "최근", "recent", "latest", "최근순", "최신순"]):
+        sort_by = "submittedDate"
+    else:
         sort_by = "relevance"
 
-    # Year filter detection (e.g., 2025, 2024, 2025년, 2025년도)
-    year_match = re.search(r'\b(20\d{2})\b', q)
-    year_filter = ""
-    if year_match:
-        target_year = year_match.group(1)
-        year_filter = f'submittedDate:[{target_year}01010000 TO {target_year}12312359]'
-
     match = re.search(r'\d{4}\.\d{4,5}', q)
-    if match: return f"id:{match.group(0)}", sort_by
+    if match: return f"id:{match.group(0)}", sort_by, target_year
 
     keyword_map = {
         "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
@@ -284,8 +283,7 @@ def parse_smart_query(user_query):
         final_query = " AND ".join(search_terms)
     else:
         clean = re.sub(r'[^\w\s가-힣]', '', q)
-        # Strip year numbers and year words
-        clean = re.sub(r'\b20\d{2}\b', '', clean)
+        clean = re.sub(r'\b(19\d{2}|20\d{2})\b', '', clean)
         stop_words = [
             "추천해줘", "추천", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", 
             "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은",
@@ -309,16 +307,17 @@ def parse_smart_query(user_query):
 
         final_query = f'all:{en_clean}'
 
-    if year_filter:
-        final_query = f"({final_query}) AND {year_filter}"
+    if target_year:
+        final_query = f'({final_query}) AND all:"{target_year}"'
 
-    return urllib.parse.quote(final_query), sort_by
+    return final_query, sort_by, target_year
 
 def search_arxiv_papers(user_query, max_results=5):
     import time
-    arxiv_query, sort_by = parse_smart_query(user_query)
+    raw_query, sort_by, target_year = parse_smart_query(user_query)
+    encoded_query = urllib.parse.quote(raw_query)
     try:
-        url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy={sort_by}&sortOrder=descending"
+        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=15&sortBy={sort_by}&sortOrder=descending"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         for attempt in range(3):
@@ -357,7 +356,14 @@ def search_arxiv_papers(user_query, max_results=5):
                 "summary": ko_summary,
                 "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
-        return papers
+
+        # If a specific year (e.g. "2024") was requested, re-sort so papers from target_year appear FIRST!
+        if target_year:
+            matched = [p for p in papers if p['published'].startswith(target_year)]
+            others = [p for p in papers if not p['published'].startswith(target_year)]
+            papers = matched + others
+
+        return papers[:max_results]
     except ValueError as ve:
         raise ve
     except Exception:
