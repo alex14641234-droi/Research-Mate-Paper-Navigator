@@ -378,6 +378,36 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
                 continue # Try fallback model
             raise ValueError(f"RATE_LIMIT: {str(e)}" if "429" in str(e) or "quota" in str(e).lower() else f"ERROR: {str(e)}")
 
+def compare_papers_with_gemini(api_key, model_name, papers_list):
+    genai.configure(api_key=api_key)
+    papers_summary = ""
+    for i, p in enumerate(papers_list, 1):
+        papers_summary += f"### [논문 {i}] {p['title']}\n- 게재일/저자: {p.get('published', '')} / {p.get('authors', '')}\n- 기존 분석/초록 요약:\n{p.get('analysis_result', p.get('summary', ''))[:1000]}\n\n"
+
+    prompt = f"""
+    당신은 세계 최고 수준의 수석 연구위원입니다. 아래 선택된 {len(papers_list)}개의 논문들을 정밀 교차 비교 분석해 주십시오.
+
+    다음 항목을 포함하여 시각성이 뛰어나고 깔끔한 마크다운 분석 리포트를 작성해 주십시오:
+    1. 📊 **핵심 정밀 비교 표 (Markdown Table)**
+       - 컬럼: [구분, 논문 1, 논문 2...]
+       - 행: [연구 목적, 핵심 방법론 및 아키텍처, 주요 연구 성과, 한계점]
+    2. 💡 **각 논문 간 차별점 및 혁신 요소 상세 비교**
+    3. 🎯 **연구자 관점에서의 종합 조언 (상황별 추천 참고 논문)**
+
+    [선택된 비교 논문 목록]
+    {papers_summary}
+    """
+
+    for m_name in [model_name, "gemini-3.6-flash", "gemini-3.5-flash"]:
+        try:
+            model = genai.GenerativeModel(m_name)
+            res = model.generate_content(prompt, generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+            return res.text
+        except Exception as e:
+            if ("429" in str(e) or "quota" in str(e).lower()) and m_name != "gemini-3.5-flash":
+                continue
+            raise ValueError(f"RATE_LIMIT: {str(e)}" if "429" in str(e) or "quota" in str(e).lower() else f"ERROR: {str(e)}")
+
 def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, chat_history):
     genai.configure(api_key=api_key)
     context_str = ""
@@ -579,8 +609,52 @@ else:
     with tab2:
         st.markdown(f"### 🗄️ {st.session_state.username}님의 연구 논문 아카이브")
         saved_papers = get_saved_papers(st.session_state.username)
-        if not saved_papers: st.info("저장된 논문이 없습니다.")
+        if not saved_papers: st.info("저장된 논문이 없습니다. [🔍 논문 탐색 및 업로드] 탭에서 관심 있는 논문을 저장해 보세요.")
         else:
+            # 📊 라이브러리 통계 요약 및 전체 BibTeX 내보내기
+            c_s1, c_s2, c_s3 = st.columns([1, 1, 2])
+            analyzed_cnt = len([p for p in saved_papers if p.get('analysis_result') not in ["분석 안됨", "분석 없음", None]])
+            c_s1.metric("총 아카이빙 논문", f"{len(saved_papers)}편")
+            c_s2.metric("AI 심층 분석 완료", f"{analyzed_cnt}편")
+            
+            with c_s3:
+                all_bibtex = "\n\n".join([get_citation(p)[1] for p in saved_papers])
+                st.download_button(
+                    "📥 라이브러리 전체 BibTeX 다운로드 (.bib)",
+                    data=all_bibtex,
+                    file_name=f"{st.session_state.username}_research_library.bib",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+            
+            st.markdown("---")
+            
+            # ⚖️ AI 논문 교차 비교 분석 기능
+            with st.expander("⚖️ AI 논문 교차 비교 분석 (2개 이상 선택)", expanded=False):
+                st.caption("아카이브에 저장된 논문 중 비교하고 싶은 논문들을 선택하면 AI가 핵심 성능, 방법론, 장단점을 한눈에 표로 교차 비교해 드립니다.")
+                paper_options = {f"{p['title']} ({p.get('published', '')[:4]})": p for p in saved_papers}
+                selected_titles = st.multiselect("비교할 논문을 선택하세요 (2~5개)", options=list(paper_options.keys()))
+                
+                if st.button("🚀 선택한 논문 교차 비교 실행", type="primary"):
+                    if len(selected_titles) < 2:
+                        st.warning("⚠️ 최소 2개 이상의 논문을 선택해 주십시오.")
+                    elif not api_key:
+                        st.error("🚨 API 키가 필요합니다.")
+                    else:
+                        selected_papers_list = [paper_options[t] for t in selected_titles]
+                        with st.spinner("AI가 선택된 논문들의 핵심 방법론, 성과, 차별점을 교차 비교 중입니다..."):
+                            try:
+                                compare_res = compare_papers_with_gemini(api_key, selected_model, selected_papers_list)
+                                st.session_state["paper_compare_result"] = compare_res
+                            except ValueError as e:
+                                st.error(f"🚨 비교 분석 중 오류가 발생했습니다: {e}")
+
+                if "paper_compare_result" in st.session_state:
+                    st.markdown("---")
+                    st.markdown(st.session_state["paper_compare_result"])
+
+            st.markdown("---")
+            st.markdown("#### 📄 아카이브 논문 목록")
             for p in reversed(saved_papers):
                 with st.container():
                     st.markdown(f"#### 📌 {p['title']}")
