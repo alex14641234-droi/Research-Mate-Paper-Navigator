@@ -131,13 +131,15 @@ def get_saved_papers(username):
     return [doc.to_dict() for doc in papers_ref.stream()]
 
 def get_user_categories(username):
-    default_cats = ["기본"]
+    default_cats = ["일반"]
     if not db: return default_cats
     try:
         doc = db.collection('users').document(username).collection('settings').document('categories').get()
         if doc.exists and 'list' in doc.to_dict():
             cats = doc.to_dict()['list']
-            return cats if cats else default_cats
+            unwanted = ["인공지능", "컴퓨터 비전", "자연어 처리", "로봇공학", "의학/생명", "기타", "기본"]
+            cleaned = [c for c in cats if c not in unwanted]
+            return cleaned if cleaned else default_cats
     except Exception:
         pass
     return default_cats
@@ -149,19 +151,6 @@ def save_user_categories(username, categories_list):
         return True
     except Exception:
         return False
-
-def select_or_add_category(username, user_categories, widget_key, label="🏷️ 카테고리 선택"):
-    cat_options = user_categories + ["➕ 새 카테고리 직접 추가..."]
-    selected_option = st.selectbox(label, options=cat_options, key=f"sel_{widget_key}")
-    if selected_option == "➕ 새 카테고리 직접 추가...":
-        new_cat_input = st.text_input("새 카테고리명 입력", key=f"inp_{widget_key}", placeholder="예: 생성형 AI, 초전도체").strip()
-        if new_cat_input:
-            if new_cat_input not in user_categories:
-                user_categories.append(new_cat_input)
-                save_user_categories(username, user_categories)
-            return new_cat_input
-        return user_categories[0] if user_categories else "기본"
-    return selected_option
 
 # --- 💬 다중 채팅 세션(Session) DB 로직 ---
 def create_chat_session(username):
@@ -560,10 +549,20 @@ else:
             st.markdown("### 📤 내 PC에서 PDF 업로드")
             uploaded_file = st.file_uploader("유료/비공개 논문 PDF 업로드", type=["pdf"])
             custom_context_upload = st.text_area("분석 시 집중할 내용 (선택)", key="ctx_upload")
-            upload_cat = select_or_add_category(st.session_state.username, user_categories, "pdf_upload", label="🏷️ 저장할 카테고리 지정")
+            
+            pdf_cat_options = user_categories + ["➕ 새 카테고리 직접 추가..."]
+            pdf_sel_cat = st.selectbox("📋 저장할 카테고리 선택", options=pdf_cat_options, key="upload_cat_sel")
+            pdf_custom_cat = ""
+            if pdf_sel_cat == "➕ 새 카테고리 직접 추가...":
+                pdf_custom_cat = st.text_input("새 카테고리명 입력", key="pdf_custom_cat_input", placeholder="예: 초전도체").strip()
             
             if uploaded_file is not None:
                 if st.button("🧠 업로드한 논문 분석 및 저장", type="primary", use_container_width=True):
+                    final_pdf_cat = pdf_custom_cat if (pdf_sel_cat == "➕ 새 카테고리 직접 추가..." and pdf_custom_cat) else (pdf_sel_cat if pdf_sel_cat != "➕ 새 카테고리 직접 추가..." else "일반")
+                    if final_pdf_cat not in user_categories and final_pdf_cat != "일반":
+                        user_categories.append(final_pdf_cat)
+                        save_user_categories(st.session_state.username, user_categories)
+
                     if not api_key: st.error("API 키가 필요합니다.")
                     else:
                         with st.spinner("AI가 PDF를 직접 읽고 분석 중입니다..."):
@@ -575,10 +574,10 @@ else:
                                     "id": f"local_{fake_id}", "title": uploaded_file.name, "en_title": uploaded_file.name,
                                     "authors": "로컬 업로드 논문", "published": datetime.now().strftime("%Y-%m-%d"),
                                     "summary": "로컬 PDF 분석 데이터", "pdf_url": "로컬파일", "analysis_result": result_text,
-                                    "category": upload_cat
+                                    "category": final_pdf_cat
                                 }
                                 save_paper_to_db(st.session_state.username, paper_to_save)
-                                st.success(f"'{uploaded_file.name}' [{upload_cat}] 저장 완료!")
+                                st.success(f"'{uploaded_file.name}' [{final_pdf_cat}] 저장 완료!")
                                 with st.expander("결과 미리보기", expanded=True): st.markdown(result_text)
                             except ValueError as e:
                                 err_msg = str(e)
@@ -610,9 +609,30 @@ else:
                     st.write(f"{paper['summary'][:200]}...")
                     
                     btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
-                    arxiv_save_cat = select_or_add_category(st.session_state.username, user_categories, f"arxiv_{paper['id']}", label="🏷️ 저장 카테고리 지정")
-                    btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
                     
+                    # DB 저장 팝오버 (카테고리 선택 및 확정)
+                    with st.popover("💾 내 DB에 저장", type="primary", use_container_width=True):
+                        st.markdown("#### 📋 저장할 카테고리 지정")
+                        arxiv_cat_opts = user_categories + ["➕ 새 카테고리 직접 추가..."]
+                        arxiv_sel_cat = st.selectbox("📋 카테고리 선택", options=arxiv_cat_opts, key=f"pop_cat_sel_{paper['id']}")
+                        
+                        arxiv_custom_cat = ""
+                        if arxiv_sel_cat == "➕ 새 카테고리 직접 추가...":
+                            arxiv_custom_cat = st.text_input("새 카테고리명 입력", key=f"pop_custom_cat_{paper['id']}", placeholder="예: 초전도체").strip()
+                        
+                        if st.button("✅ 내 DB 저장 확정", key=f"btn_confirm_save_{paper['id']}", type="primary", use_container_width=True):
+                            final_arxiv_cat = arxiv_custom_cat if (arxiv_sel_cat == "➕ 새 카테고리 직접 추가..." and arxiv_custom_cat) else (arxiv_sel_cat if arxiv_sel_cat != "➕ 새 카테고리 직접 추가..." else "일반")
+                            if final_arxiv_cat not in user_categories and final_arxiv_cat != "일반":
+                                user_categories.append(final_arxiv_cat)
+                                save_user_categories(st.session_state.username, user_categories)
+
+                            paper_to_save = paper.copy()
+                            paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
+                            paper_to_save['category'] = final_arxiv_cat
+                            save_paper_to_db(st.session_state.username, paper_to_save)
+                            st.success(f"[{final_arxiv_cat}] 카테고리에 저장되었습니다!")
+                            st.rerun()
+
                     # 인용 팝오버 버튼
                     with st.popover("🔖 인용 정보 (Citation)", use_container_width=True):
                         apa, bibtex = get_citation(paper)
@@ -636,13 +656,6 @@ else:
                                         st.error(f"🚨 분석 중 오류가 발생했습니다: {err_msg}")
                     if f"result_{paper['id']}" in st.session_state:
                         st.markdown(st.session_state[f"result_{paper['id']}"])
-
-                    if btn_save:
-                        paper_to_save = paper.copy()
-                        paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
-                        paper_to_save['category'] = arxiv_save_cat
-                        save_paper_to_db(st.session_state.username, paper_to_save)
-                        st.success(f"[{arxiv_save_cat}] 카테고리에 저장 완료!")
 
     with tab2:
         st.markdown(f"### 🗄️ {st.session_state.username}님의 연구 논문 아카이브")
@@ -691,13 +704,21 @@ else:
                     st.markdown("---")
                     st.markdown(st.session_state["paper_compare_result"])
 
-            # 🏷️ 카테고리 필터링 및 관리 Bar
-            all_existing_cats = list(dict.fromkeys(user_categories + [p.get('category', '기본') for p in saved_papers]))
+            # 📋 카테고리 필터링 및 관리 Bar
+            all_existing_cats = list(dict.fromkeys(user_categories + [p.get('category', '일반') for p in saved_papers]))
             
-            selected_cat_filter = st.selectbox("🏷️ 카테고리 필터 (선택)", options=["전체 보기"] + all_existing_cats)
+            c_filter1, c_filter2 = st.columns([3, 1])
+            with c_filter1:
+                selected_cat_filter = st.selectbox("📋 카테고리 필터", options=["전체 보기"] + all_existing_cats)
+            with c_filter2:
+                st.write("") # alignment spacing
+                if st.button("🧹 카테고리 목록 초기화", use_container_width=True):
+                    save_user_categories(st.session_state.username, ["일반"])
+                    st.success("카테고리 목록이 초기화되었습니다.")
+                    st.rerun()
 
             if selected_cat_filter != "전체 보기":
-                display_papers = [p for p in saved_papers if p.get('category', '기본') == selected_cat_filter]
+                display_papers = [p for p in saved_papers if p.get('category', '일반') == selected_cat_filter]
             else:
                 display_papers = saved_papers
 
@@ -710,15 +731,29 @@ else:
                     col_p_title, col_p_cat = st.columns([3, 1])
                     with col_p_title:
                         st.markdown(f"#### 📌 {p['title']}")
-                        p_cat = p.get('category', '기본')
-                        st.caption(f"🏷️ **카테고리**: `{p_cat}` | 🆔 {p['id']} | 💾 {p['saved_at']}")
+                        p_cat = p.get('category', '일반')
+                        st.caption(f"📋 **카테고리**: `{p_cat}` | 🆔 {p['id']} | 💾 {p['saved_at']}")
                     with col_p_cat:
-                        cur_cat = p.get('category', '기본')
-                        new_p_cat = select_or_add_category(st.session_state.username, user_categories, f"mod_{p['id']}", label="🏷️ 카테고리 변경")
-                        if new_p_cat != cur_cat and new_p_cat.strip():
-                            p['category'] = new_p_cat
-                            save_paper_to_db(st.session_state.username, p)
-                            st.rerun()
+                        cur_cat = p.get('category', '일반')
+                        with st.popover(f"📋 카테고리 변경 ({cur_cat})", use_container_width=True):
+                            mod_cat_opts = user_categories + ["➕ 새 카테고리 직접 추가..."]
+                            cur_idx = mod_cat_opts.index(cur_cat) if cur_cat in mod_cat_opts else 0
+                            selected_mod_cat = st.selectbox("변경할 카테고리", options=mod_cat_opts, index=cur_idx, key=f"mod_sel_{p['id']}")
+                            
+                            custom_mod_cat = ""
+                            if selected_mod_cat == "➕ 새 카테고리 직접 추가...":
+                                custom_mod_cat = st.text_input("새 카테고리명 입력", key=f"mod_custom_{p['id']}", placeholder="예: 초전도체").strip()
+                                
+                            if st.button("변경 저장", key=f"btn_save_mod_{p['id']}", type="primary", use_container_width=True):
+                                target_mod_cat = custom_mod_cat if (selected_mod_cat == "➕ 새 카테고리 직접 추가..." and custom_mod_cat) else (selected_mod_cat if selected_mod_cat != "➕ 새 카테고리 직접 추가..." else "일반")
+                                if target_mod_cat not in user_categories and target_mod_cat != "일반":
+                                    user_categories.append(target_mod_cat)
+                                    save_user_categories(st.session_state.username, user_categories)
+                                
+                                p['category'] = target_mod_cat
+                                save_paper_to_db(st.session_state.username, p)
+                                st.success(f"[{target_mod_cat}](으)로 변경되었습니다.")
+                                st.rerun()
 
                     has_analysis = p.get('analysis_result') not in ["분석 안됨", "분석 없음", None]
                     with st.expander("🧠 AI 심층 분석 결과", expanded=has_analysis):
