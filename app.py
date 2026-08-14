@@ -272,7 +272,7 @@ def search_arxiv_papers(user_query, max_results=4):
     arxiv_query, _ = parse_smart_query(user_query)
     try:
         url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy=relevance&sortOrder=descending"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        headers = {'User-Agent': 'ResearchMate/1.0 (mailto:contact@researchmate.com)'}
         
         for attempt in range(3):
             try:
@@ -337,7 +337,7 @@ def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'ResearchMate/1.0 (mailto:contact@researchmate.com)'}
         response = requests.get(pdf_url, headers=headers, timeout=20)
         response.raise_for_status()
         context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}" if custom_context else ""
@@ -467,7 +467,7 @@ else:
             st.markdown("### 🌐 ArXiv 스마트 논문 검색")
             with st.form(key="search_form"):
                 search_input = st.text_input("검색어, 연구 주제를 입력하세요 (엔터키로 검색 가능)")
-                custom_context_search = st.text_area("맞춤형 분석 요구사항 (선택)")
+                custom_context_search = st.text_input("맞춤형 분석 요구사항 (선택, 엔터키로 검색 가능)")
                 submit_search = st.form_submit_button("🚀 검색", use_container_width=True)
 
             if submit_search and search_input:
