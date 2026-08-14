@@ -257,6 +257,13 @@ def parse_smart_query(user_query):
     if "관련성" in q or "relevance" in q:
         sort_by = "relevance"
 
+    # Year filter detection (e.g., 2025, 2024, 2025년, 2025년도)
+    year_match = re.search(r'\b(20\d{2})\b', q)
+    year_filter = ""
+    if year_match:
+        target_year = year_match.group(1)
+        year_filter = f'submittedDate:[{target_year}01010000 TO {target_year}12312359]'
+
     match = re.search(r'\d{4}\.\d{4,5}', q)
     if match: return f"id:{match.group(0)}", sort_by
 
@@ -277,9 +284,12 @@ def parse_smart_query(user_query):
         final_query = " AND ".join(search_terms)
     else:
         clean = re.sub(r'[^\w\s가-힣]', '', q)
+        # Strip year numbers and year words
+        clean = re.sub(r'\b20\d{2}\b', '', clean)
         stop_words = [
             "추천해줘", "추천", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", 
-            "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은"
+            "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은",
+            "년도", "년", "기준"
         ]
         for word in stop_words:
             clean = clean.replace(word, "")
@@ -299,9 +309,11 @@ def parse_smart_query(user_query):
 
         final_query = f'all:{en_clean}'
 
+    if year_filter:
+        final_query = f"({final_query}) AND {year_filter}"
+
     return urllib.parse.quote(final_query), sort_by
 
-@st.cache_data(ttl=1800, show_spinner=False)
 def search_arxiv_papers(user_query, max_results=5):
     import time
     arxiv_query, sort_by = parse_smart_query(user_query)
@@ -633,11 +645,25 @@ else:
                                 else:
                                     st.error(f"🚨 분석 중 오류가 발생했습니다: {err_msg}")
 
-        query_to_search = search_input.strip() or custom_context_search.strip()
+        parts = []
+        if search_input.strip(): parts.append(search_input.strip())
+        if custom_context_search.strip(): parts.append(custom_context_search.strip())
+        query_to_search = " ".join(parts)
+        
         if submit_search and query_to_search:
-            with st.spinner("논문을 찾고 있습니다... (잠시만 기다려주세요)"):
+            # 1. Clear old paper analysis cache in session state so fresh searches evaluate anew for the current situation!
+            for k in list(st.session_state.keys()):
+                if k.startswith("result_") or k.startswith("saved_msg_") or k.startswith("show_save_"):
+                    del st.session_state[k]
+
+            with st.spinner(f"'{query_to_search}' 관점으로 맞춤 논문을 탐색 중입니다..."):
                 try:
                     results = search_arxiv_papers(query_to_search)
+                    # Fallback if year-restricted query yields 0 results
+                    if not results and re.search(r'\b20\d{2}\b', query_to_search):
+                        fallback_q = re.sub(r'\b20\d{2}\b', '', query_to_search).strip()
+                        results = search_arxiv_papers(fallback_q)
+
                     st.session_state.search_results = results
                     if not results:
                         st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
