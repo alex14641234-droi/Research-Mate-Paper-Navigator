@@ -306,7 +306,7 @@ Analyze the following academic search request and extract structured search crit
 User Query: "{user_query}"
 
 Output ONLY a valid JSON object with the following keys, no markdown blocks, no extra text:
-- "keywords": list of string keywords (translate Korean to English if needed).
+- "keywords": list of string keywords. MUST be translated to pure academic/technical English terms (e.g. "Deep Learning", "Transformer"). DO NOT include Korean words. DO NOT include non-academic words like "paper", "author", "find", "search".
 - "authors": list of string author names or nationalities (e.g. ["Korean"]). If the user asks for Korean authors, this MUST be exactly ["Korean"].
 - "date_start": string "YYYY-MM-DD" or null.
 - "date_end": string "YYYY-MM-DD" or null.
@@ -326,8 +326,12 @@ JSON Output:
 def generate_arxiv_query(json_data):
     terms = []
     if json_data.get('keywords'):
-        kw_terms = [f'all:"{kw}"' for kw in json_data['keywords']]
-        terms.append("(" + " OR ".join(kw_terms) + ")")
+        valid_kws = [kw for kw in json_data['keywords'] if not re.search(r'[가-힣]', kw)]
+        if valid_kws:
+            kw_terms = [f'all:"{kw}"' for kw in valid_kws]
+            terms.append("(" + " OR ".join(kw_terms) + ")")
+        else:
+            terms.append('(all:"deep learning")')
     if json_data.get('authors'):
         au_terms = []
         for au in json_data['authors']:
