@@ -465,17 +465,17 @@ def search_arxiv_papers(user_query, max_results=5):
         if target_years:
             strict_matches = [p for p in papers if any(p['published'].startswith(y) for y in target_years)]
             if strict_matches:
-                return strict_matches[:max_results]
+                return strict_matches[:max_results], notice_msg
             
             ref_year = int(target_years[0])
             papers.sort(key=lambda p: abs(int(p['published'][:4]) - ref_year))
-            return papers[:max_results]
+            return papers[:max_results], notice_msg
 
-        return papers[:max_results]
+        return papers[:max_results], notice_msg
     except ValueError as ve:
         raise ve
     except Exception:
-        return []
+        return [], None
 
 # --- 🤖 AI 분석 및 챗봇 로직 (스트리밍) ---
 def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
@@ -1258,3 +1258,4 @@ else:
                             st.success("✅ 비밀번호가 성공적으로 변경되었습니다.")
                         else:
                             st.error("비밀번호 변경 중 오류가 발생했습니다.")
+
