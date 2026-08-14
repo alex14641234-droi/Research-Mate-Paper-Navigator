@@ -10,6 +10,7 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
 import os
+import uuid
 
 st.set_page_config(page_title="Research Mate", page_icon="🔬", layout="wide")
 
@@ -98,7 +99,8 @@ def create_chat_session(username):
     if not db: return None
     sessions_ref = db.collection('users').document(username).collection('chat_sessions')
     _, new_ref = sessions_ref.add({
-        'created_at': datetime.now().isoformat()
+        'created_at': datetime.now().isoformat(),
+        'title': '새 채팅'
     })
     return new_ref.id
 
@@ -123,10 +125,24 @@ def save_chat_message(username, session_id, role, content):
         'timestamp': datetime.now().isoformat()
     })
 
+def update_chat_session_title(username, session_id, title):
+    if not db: return
+    db.collection('users').document(username).collection('chat_sessions').document(session_id).update({'title': title})
+
 def get_chat_history(username, session_id):
     if not db: return []
     msgs_ref = db.collection('users').document(username).collection('chat_sessions').document(session_id).collection('messages').order_by('timestamp')
     return [doc.to_dict() for doc in msgs_ref.stream()]
+
+def generate_chat_title(api_key, model_name, first_query):
+    try:
+        genai.configure(api_key=api_key)
+        prompt = f"다음 사용자의 질문을 바탕으로 3~5단어 길이의 짧고 직관적인 채팅방 제목을 만들어주세요. 따옴표나 특수기호 없이 핵심 제목만 출력하세요.\n\n질문 내용: {first_query}"
+        model = genai.GenerativeModel(model_name)
+        res = model.generate_content(prompt, generation_config={"temperature": 0.3})
+        return res.text.strip().replace('"', '').replace("'", "")
+    except Exception:
+        return "새 대화"
 
 # --- 🌐 번역 및 ArXiv 탐색 로직 ---
 def translate_to_ko(text):
@@ -199,6 +215,34 @@ def search_arxiv_papers(user_query, max_results=4):
         return []
 
 # --- 🤖 AI 분석 및 챗봇 로직 ---
+def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
+    try:
+        genai.configure(api_key=api_key)
+        context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
+        
+        prompt = """
+        당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
+        업로드된 로컬 PDF 논문을 바탕으로 다음 3가지를 가시성이 뛰어나고 깔끔한 마크다운 형식으로 정리해 주십시오:
+
+        ### 🔗 1. 핵심 요약 및 기여점
+        - 이 논문이 제안하는 핵심 아이디어와 학계에 기여하는 바를 알기 쉽게 설명해주세요.
+
+        ### 🧮 2. 핵심 수식 및 변수 분석 (해당 시)
+        - 논문의 핵심 수식을 발췌하고 주요 변수들을 설명해주세요.
+
+        ### 📊 3. 주요 아키텍처 및 시각적 인사이트
+        - 논문 내 주요 모델 구조나 실험 결과를 요약해주세요.
+        """ + context_prompt
+
+        model = genai.GenerativeModel(model_name)
+        res = model.generate_content([
+            {"mime_type": "application/pdf", "data": pdf_bytes},
+            prompt
+        ], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+        return res.text
+    except Exception as e:
+        return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
+
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
@@ -244,7 +288,7 @@ def chat_with_ai(api_key, model_name, user_query, selected_papers_data, chat_his
         else:
             for p in selected_papers_data:
                 context_str += f"- 논문 제목: {p['title']}\n"
-                context_str += f"- 초록 요약: {p['summary']}\n"
+                context_str += f"- 초록 요약: {p.get('summary', '제공 안됨')}\n"
                 context_str += f"- 기존 심층분석: {p.get('analysis_result', '분석 안됨')}\n\n"
 
         history_text = ""
@@ -257,6 +301,10 @@ def chat_with_ai(api_key, model_name, user_query, selected_papers_data, chat_his
 아래 제공된 [선택된 논문 정보]와 [이전 대화 내역]을 참고하여, 사용자의 [질문]에 한국어로 친절하고 전문적으로 답해주세요.
 사용자가 여러 논문을 선택하고 공통점이나 차이점을 물어보면 정확하게 비교 분석해주세요.
 
+**[⚠️ 매우 중요한 지침 - 환각 방지(Hallucination Prevention)]**
+1. 반드시 제공된 [선택된 논문 정보] 내에서만 답변을 생성하십시오.
+2. 만약 질문에 대한 답을 제공된 텍스트에서 찾을 수 없다면 절대 추측하거나 외부 지식을 동원하여 지어내지 마십시오. 대신 "제공된 논문 내용에서는 해당 정보를 찾을 수 없습니다."라고 명확히 밝히십시오.
+
 [선택된 논문 정보]
 {context_str}
 
@@ -267,7 +315,7 @@ def chat_with_ai(api_key, model_name, user_query, selected_papers_data, chat_his
 {user_query}
 """
         model = genai.GenerativeModel(model_name)
-        res = model.generate_content(prompt, generation_config={"temperature": 0.3})
+        res = model.generate_content(prompt, generation_config={"temperature": 0.2})
         return res.text
     except Exception as e:
         return f"에러 발생: AI 챗봇 호출 중 문제가 생겼습니다. {str(e)}"
@@ -369,89 +417,102 @@ else:
     st.markdown("---")
     
     # ✨ 3개의 탭으로 확장
-    tab1, tab2, tab3 = st.tabs(["🔍 논문 탐색 및 맞춤 분석", "🗄️ 내 연구 DB (My Library)", "💬 AI 논문 비서"])
+    tab1, tab2, tab3 = st.tabs(["🔍 논문 탐색 및 업로드", "🗄️ 내 연구 DB (My Library)", "💬 AI 논문 비서"])
 
     with tab1:
-        with st.form(key="search_form"):
-            search_input = st.text_input("🔍 검색어, 연구 주제를 입력하세요 (예: 자율주행 최신 논문 추천해줘)")
-            st.markdown("---")
-            st.markdown("**💡 맞춤형 분석 요구사항 (선택사항)**")
-            custom_context = st.text_area(
-                "현재 연구 상황이나 특별히 알고 싶은 내용을 적어주세요.", 
-                placeholder="예: 저는 인공지능 연구를 시작하는 초보자입니다. 이 논문의 핵심 알고리즘이 기존 모델들과 어떻게 다른지 비유를 들어 쉽게 설명해주세요."
-            )
-            submit_button = st.form_submit_button("🚀 스마트 논문 검색", use_container_width=True)
+        col_search, col_upload = st.columns([1, 1])
+        
+        with col_search:
+            st.markdown("### 🌐 ArXiv 스마트 논문 검색")
+            with st.form(key="search_form"):
+                search_input = st.text_input("검색어, 연구 주제를 입력하세요", placeholder="자율주행 최신 논문 찾아줘")
+                custom_context_search = st.text_area("맞춤형 분석 요구사항 (선택)", placeholder="이 알고리즘을 쉽게 설명해주세요.")
+                submit_search = st.form_submit_button("🚀 검색", use_container_width=True)
 
-        if submit_button and search_input:
-            with st.spinner("최상위 관련 논문을 찾고, 한국어로 번역하고 있습니다... (약 2~3초 소요)"):
-                st.session_state.search_results = search_arxiv_papers(search_input)
+            if submit_search and search_input:
+                with st.spinner("논문을 찾고 있습니다..."):
+                    st.session_state.search_results = search_arxiv_papers(search_input)
 
-        if st.session_state.get("search_results"):
-            st.markdown("### 📄 발견된 최상위 논문 (한국어 자동 번역 🇰🇷)")
-            for idx, paper in enumerate(st.session_state.search_results):
-                with st.expander(f"[{idx+1}] {paper['title']} (클릭하여 열기)", expanded=True):
-                    st.caption(f"✍️ 저자: {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
-                    st.markdown(f"**원제(English)**: *{paper['en_title']}*")
-                    st.write(f"**초록 요약**: {paper['summary'][:350]}...")
-                    
-                    c1, c2, c3 = st.columns([2, 3, 2])
-                    with c1: st.link_button("📄 영문 원본 보기", paper['pdf_url'], use_container_width=True)
-                    
-                    with c2: btn_analyze = st.button("🧠 맞춤형 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
-                    with c3: btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
-                    
-                    if btn_analyze:
-                        if not api_key:
-                            st.error("⚠️ 에러: 화면 좌측(사이드바)에 Gemini API 키를 먼저 입력해주세요!")
-                        elif not selected_model:
-                            st.error("⚠️ 에러: API 키가 유효하지 않아 모델을 불러오지 못했습니다.")
-                        else:
-                            with st.spinner(f"⚡ [{selected_model}] 모델로 초고속 정밀 분석 중입니다..."):
-                                result_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context)
-                                if "에러 발생" in result_text:
-                                    st.error(result_text)
-                                    st.info("💡 팁: 드문 경우 PDF가 너무 커서 에러가 날 수 있습니다. 좌측에서 다른 모델을 선택해 시도해보세요!")
-                                else:
-                                    st.success(f"✨ [{selected_model}] 심층 분석 완료! (우측 '내 DB에 저장' 시 분석 내용도 영구 저장됩니다)")
+            if st.session_state.get("search_results"):
+                for idx, paper in enumerate(st.session_state.search_results):
+                    with st.expander(f"📄 {paper['title'][:40]}...", expanded=False):
+                        st.caption(f"✍️ {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
+                        st.write(f"{paper['summary'][:200]}...")
+                        
+                        btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
+                        btn_save = st.button("💾 내 DB에 저장", key=f"save_{paper['id']}", type="primary", use_container_width=True)
+                        
+                        if btn_analyze:
+                            if not api_key or not selected_model:
+                                st.error("API 키와 모델을 선택해주세요.")
+                            else:
+                                with st.spinner("정밀 분석 중..."):
+                                    res_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context_search)
+                                    st.session_state[f"result_{paper['id']}"] = res_text
+                                    st.success("분석 완료! 열어보세요.")
                                     
-                                    with st.expander("🧠 AI 심층 분석 리포트 (클릭하여 열고 닫기)", expanded=True):
-                                        st.markdown(result_text)
-                                        
-                                    st.session_state[f"result_{paper['id']}"] = result_text
-
-                    if btn_save:
-                        paper_to_save = paper.copy()
                         if f"result_{paper['id']}" in st.session_state:
-                            paper_to_save['analysis_result'] = st.session_state[f"result_{paper['id']}"]
-                        else:
-                            paper_to_save['analysis_result'] = "심층 분석을 진행하지 않고 저장된 논문입니다. (검색 탭에서 '심층 분석' 후 다시 저장해보세요!)"
+                            st.markdown(st.session_state[f"result_{paper['id']}"])
+
+                        if btn_save:
+                            paper_to_save = paper.copy()
+                            paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
+                            save_paper_to_db(st.session_state.username, paper_to_save)
+                            st.success("저장 완료!")
+
+        with col_upload:
+            st.markdown("### 📤 내 PC에서 PDF 업로드")
+            st.caption("유료 저널이나 비공개 논문 PDF를 직접 업로드하여 분석합니다.")
+            
+            uploaded_file = st.file_uploader("PDF 파일을 선택하세요", type=["pdf"])
+            custom_context_upload = st.text_area("분석 시 집중할 내용 (선택)", placeholder="제안된 모델 구조를 요약해 줘.", key="ctx_upload")
+            
+            if uploaded_file is not None:
+                if st.button("🧠 업로드한 논문 분석 및 저장", type="primary", use_container_width=True):
+                    if not api_key or not selected_model:
+                        st.error("API 키와 모델을 선택해주세요.")
+                    else:
+                        with st.spinner("AI가 PDF를 직접 읽고 분석 중입니다..."):
+                            pdf_bytes = uploaded_file.getvalue()
+                            result_text = analyze_local_pdf(api_key, selected_model, pdf_bytes, uploaded_file.name, custom_context_upload)
                             
-                        save_paper_to_db(st.session_state.username, paper_to_save)
-                        st.success("✅ [내 연구 DB]에 한국어 요약과 함께 저장되었습니다! (분석 내용이 있다면 함께 저장됨)")
+                            # 가상의 논문 정보 생성하여 DB에 저장
+                            fake_id = str(uuid.uuid4())[:8]
+                            paper_to_save = {
+                                "id": f"local_{fake_id}",
+                                "title": uploaded_file.name,
+                                "en_title": uploaded_file.name,
+                                "authors": "로컬 업로드 논문",
+                                "published": datetime.now().strftime("%Y-%m-%d"),
+                                "summary": "로컬 PDF에서 추출된 내용을 기반으로 AI가 분석한 데이터입니다.",
+                                "pdf_url": "로컬파일",
+                                "analysis_result": result_text
+                            }
+                            save_paper_to_db(st.session_state.username, paper_to_save)
+                            st.success(f"'{uploaded_file.name}' 분석 및 내 DB 저장 완료! 이제 'AI 논문 비서' 탭에서 질문해보세요.")
+                            
+                            with st.expander("결과 미리보기", expanded=True):
+                                st.markdown(result_text)
 
     with tab2:
         st.markdown(f"### 🗄️ {st.session_state.username}님의 연구 논문 아카이브")
         saved_papers = get_saved_papers(st.session_state.username)
         
         if not saved_papers:
-            st.info("아직 저장된 논문이 없습니다. 탐색 탭에서 '💾 내 DB에 저장' 버튼을 눌러보세요!")
+            st.info("아직 저장된 논문이 없습니다.")
         else:
             for p in reversed(saved_papers):
                 with st.container():
                     st.markdown(f"#### 📌 {p['title']}")
-                    st.caption(f"🆔 arXiv:{p['id']} | 💾 저장일시: {p['saved_at']}")
-                    
-                    with st.expander("📖 간단 요약 보기"):
-                        st.write(p.get('summary', '초록 정보가 없습니다.'))
-                        
+                    st.caption(f"🆔 {p['id']} | 💾 저장일시: {p['saved_at']}")
                     with st.expander("🧠 맞춤형 AI 심층 분석 결과"):
-                        st.markdown(p.get('analysis_result', '이 논문은 심층 분석 없이 저장되었습니다.'))
+                        st.markdown(p.get('analysis_result', '분석 정보가 없습니다.'))
                     
-                    col1, col2 = st.columns([8, 2])
-                    with col1:
-                        st.link_button("📄 PDF 원문 열기", p['pdf_url'])
-                    with col2:
-                        if st.button("🗑️ 삭제하기", key=f"del_{p['id']}", type="secondary", use_container_width=True):
+                    c1, c2 = st.columns([8, 2])
+                    if p.get('pdf_url') != '로컬파일':
+                        with c1: st.link_button("📄 PDF 원문 열기", p['pdf_url'])
+                    with c2:
+                        if st.button("🗑️ 삭제", key=f"del_p_{p['id']}", type="secondary", use_container_width=True):
                             delete_paper_from_db(st.session_state.username, p['id'])
                             st.rerun() 
                 st.markdown("---")
@@ -479,8 +540,7 @@ else:
                     
                 for s in sessions:
                     c1, c2 = st.columns([8, 2])
-                    t = s.get('created_at', '')
-                    title_text = t[5:16].replace('T', ' ') if t else '새 채팅'
+                    title_text = s.get('title', '새 채팅')
                     btn_type = "primary" if st.session_state.get('current_chat_session') == s['id'] else "secondary"
                     
                     with c1:
@@ -488,7 +548,7 @@ else:
                             st.session_state.current_chat_session = s['id']
                             st.rerun()
                     with c2:
-                        if st.button("❌", key=f"del_{s['id']}", help="삭제"):
+                        if st.button("🗑️", key=f"del_s_{s['id']}", help="삭제"):
                             delete_chat_session(st.session_state.username, s['id'])
                             if st.session_state.get('current_chat_session') == s['id']:
                                 st.session_state.current_chat_session = None
@@ -498,17 +558,15 @@ else:
         with col_chat:
             curr_session = st.session_state.get('current_chat_session')
             if not curr_session:
-                st.markdown("### 💬 AI 논문 비서")
                 st.info("👈 왼쪽에서 '➕ 새로운 채팅 시작'을 누르거나 이전 채팅방을 선택해주세요.")
             else:
                 st.markdown("### 💬 AI 논문 비서")
-                st.caption("선택한 논문들을 바탕으로 질문하거나 대화를 나누세요!")
                 
                 saved_papers = get_saved_papers(st.session_state.username)
                 paper_options = {p['title']: p for p in saved_papers}
                 
                 selected_titles = st.multiselect(
-                    "🧠 대화에 참고할 논문을 선택하세요 (다중 선택 가능):",
+                    "🧠 대화에 참고할 논문을 선택하세요:",
                     options=list(paper_options.keys()),
                     key=f"multi_{curr_session}"
                 )
@@ -516,32 +574,52 @@ else:
                 
                 st.markdown("---")
                 
-                # 입력창을 위로 이동 (form 사용)
+                # --- 원클릭 단축 질문 버튼 ---
+                st.caption("💡 추천 질문 (클릭 시 자동 전송)")
+                bc1, bc2, bc3 = st.columns(3)
+                auto_query = None
+                with bc1: 
+                    if st.button("📄 핵심 내용 요약해 줘", use_container_width=True): auto_query = "선택된 논문들의 핵심 내용을 알기 쉽게 요약해 줘."
+                with bc2: 
+                    if st.button("🔬 연구 방법론 비교해 줘", use_container_width=True): auto_query = "선택된 논문들이 사용한 연구 방법론의 차이점과 특징을 비교해 줘."
+                with bc3: 
+                    if st.button("⚠️ 한계점 파악해 줘", use_container_width=True): auto_query = "선택된 논문들이 공통적으로 가진 한계점이나, 각 논문의 아쉬운 점을 찾아 줘."
+                
+                # --- 입력창 ---
                 with st.form(key=f"chat_form_{curr_session}", clear_on_submit=True):
                     c1, c2 = st.columns([9, 1])
                     with c1:
-                        user_query = st.text_input("질문 입력", placeholder="선택한 논문들의 차이점은 뭐야? / 이 알고리즘을 쉽게 설명해줘", label_visibility="collapsed")
+                        user_query = st.text_input("질문 입력", placeholder="선택한 논문들의 차이점은 뭐야?", label_visibility="collapsed")
                     with c2:
                         submit_chat = st.form_submit_button("전송 🚀", use_container_width=True)
                 
                 chat_history = get_chat_history(st.session_state.username, curr_session)
                 
-                chat_container = st.container(height=500)
+                chat_container = st.container(height=400)
                 with chat_container:
                     if not chat_history:
-                        st.info("새로운 대화를 시작했습니다! 논문을 선택하고 궁금한 점을 질문해 보세요.")
+                        st.info("새로운 대화를 시작했습니다! 단축 버튼을 누르거나 직접 질문해 보세요.")
                     for msg in chat_history:
                         with st.chat_message(msg["role"]):
                             st.markdown(msg["content"])
                 
-                if submit_chat and user_query:
+                # 최종 전송 로직 (수동 입력 또는 자동 버튼)
+                final_query = auto_query if auto_query else (user_query if submit_chat else None)
+
+                if final_query:
                     if not api_key or not selected_model:
-                        st.error("좌측 사이드바에서 API 키를 입력하고 모델을 선택해주세요.")
+                        st.error("API 키를 입력하고 모델을 선택해주세요.")
                     else:
+                        # 채팅방 제목이 "새 채팅"일 경우 스마트하게 업데이트
+                        current_session_info = next((s for s in sessions if s['id'] == curr_session), None)
+                        if current_session_info and current_session_info.get('title', '새 채팅') == '새 채팅':
+                            new_title = generate_chat_title(api_key, selected_model, final_query)
+                            update_chat_session_title(st.session_state.username, curr_session, new_title)
+
                         with chat_container:
                             with st.chat_message("user"):
-                                st.markdown(user_query)
-                        save_chat_message(st.session_state.username, curr_session, "user", user_query)
+                                st.markdown(final_query)
+                        save_chat_message(st.session_state.username, curr_session, "user", final_query)
                         
                         with chat_container:
                             with st.chat_message("assistant"):
@@ -550,7 +628,7 @@ else:
                                     ai_response = chat_with_ai(
                                         api_key, 
                                         selected_model, 
-                                        user_query, 
+                                        final_query, 
                                         selected_papers_data, 
                                         updated_history
                                     )
