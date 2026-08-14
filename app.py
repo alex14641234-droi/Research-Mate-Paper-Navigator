@@ -687,6 +687,13 @@ else:
                     st.caption(f"✍️ {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
                     st.write(f"{paper['summary'][:200]}...")
                     
+                    # 🔗 논문 원문 PDF & ArXiv 원문 웹페이지 바로가기 버튼
+                    col_link_pdf, col_link_abs = st.columns([1, 1])
+                    with col_link_pdf:
+                        st.link_button("📄 논문 원문 PDF 열기", paper['pdf_url'], use_container_width=True)
+                    with col_link_abs:
+                        st.link_button("🌐 ArXiv 원문 웹페이지", f"https://arxiv.org/abs/{paper['id']}", use_container_width=True)
+                    
                     btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
                     
                     # DB 저장 토글 버튼 & 패널
@@ -983,7 +990,12 @@ else:
                     
                     c1, c2, c3 = st.columns([6, 2, 2])
                     if p.get('pdf_url') != '로컬파일': 
-                        with c1: st.link_button("📄 PDF 열기", p['pdf_url'], use_container_width=True)
+                        with c1:
+                            col_tab2_pdf, col_tab2_abs = st.columns([1, 1])
+                            with col_tab2_pdf:
+                                st.link_button("📄 원문 PDF 열기", p['pdf_url'], use_container_width=True)
+                            with col_tab2_abs:
+                                st.link_button("🌐 ArXiv 원문", f"https://arxiv.org/abs/{p['id']}", use_container_width=True)
                     with c2:
                         with st.popover("🔖 인용 복사", use_container_width=True):
                             apa, bibtex = get_citation(p)
