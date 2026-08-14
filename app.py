@@ -5,6 +5,7 @@ import re
 import urllib.parse
 from datetime import datetime
 import hashlib
+import json
 import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials
@@ -294,6 +295,42 @@ def parse_year_range(user_query):
 
     return None, None, None
 
+def parse_query_with_ai(api_key, model_name, user_query):
+    if not api_key:
+        return None
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        prompt = f"""
+Analyze the following academic search request and extract the parameters for ArXiv API.
+User Query: "{user_query}"
+
+Output ONLY a valid JSON object with the following keys, no markdown blocks, no extra text:
+- "final_query": The extracted ArXiv query string (e.g. "all:superconductivity AND au:Homin Kim" or "all:\\"autonomous driving\\""). Translate Korean keywords to English. Do not include year or author directly in this query if it can be filtered by target_years or author_ko.
+- "sort_by": "relevance", "lastUpdatedDate", or "submittedDate". Default to "relevance".
+- "target_years": A list of strings representing the target years (e.g. ["2010", "2011"]) if mentioned, else null. (e.g., "2010년" -> ["2010"], "2010년대" -> ["2010", "2011", ..., "2019"])
+- "author_ko": The name of the author in Korean if mentioned, else null.
+
+JSON Output:
+"""
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if text.startswith('```json'):
+            text = text.split('```json')[1].split('```')[0].strip()
+        elif text.startswith('```'):
+            text = text.split('```')[1].split('```')[0].strip()
+            
+        data = json.loads(text)
+        
+        target_years = data.get('target_years')
+        if target_years and len(target_years) == 0:
+            target_years = None
+            
+        return (data.get('final_query'), data.get('sort_by', 'relevance'), target_years, data.get('author_ko'))
+    except Exception as e:
+        print(f"AI Parse Error: {e}")
+        return None
+
 def parse_smart_query(user_query):
     q = user_query.strip()
     q_lower = q.lower()
@@ -376,9 +413,20 @@ def parse_smart_query(user_query):
 
     return final_query, sort_by, target_years, author_ko
 
-def search_arxiv_papers(user_query, max_results=5):
+def search_arxiv_papers(user_query, api_key=None, model_name=None, max_results=5):
     import time
-    raw_query, sort_by, target_years, author_ko = parse_smart_query(user_query)
+    
+    parsed = None
+    if api_key and model_name:
+        parsed = parse_query_with_ai(api_key, model_name, user_query)
+        
+    if parsed:
+        raw_query, sort_by, target_years, author_ko = parsed
+        if not raw_query: raw_query = "all:deep learning"
+    else:
+        raw_query, sort_by, target_years, author_ko = parse_smart_query(user_query)
+        
+
     encoded_query = urllib.parse.quote(raw_query)
     notice_msg = None
     try:
@@ -759,7 +807,7 @@ else:
 
             with st.spinner(f"'{query_to_search}' 관점으로 맞춤 논문을 탐색 중입니다..."):
                 try:
-                    results, notice_msg = search_arxiv_papers(query_to_search)
+                    results, notice_msg = search_arxiv_papers(query_to_search, api_key, selected_model)
                     st.session_state.search_results = results
                     st.session_state.search_notice = notice_msg
                     if not results:
