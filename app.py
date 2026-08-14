@@ -333,8 +333,8 @@ def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
         return res.text
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower():
-            return "🚨 **API 사용량 초과 (Rate Limit / Quota Exceeded)**\n\nGoogle Gemini API의 무료 등급 요청 한도(분당 15회 등)를 초과했습니다. 약 **1~2분 뒤**에 다시 시도해주세요."
-        return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
+            raise ValueError(f"RATE_LIMIT: {str(e)}")
+        raise ValueError(f"ERROR: {str(e)}")
 
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     try:
@@ -355,8 +355,8 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
         return res.text
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower():
-            return "🚨 **API 사용량 초과 (Rate Limit / Quota Exceeded)**\n\nGoogle Gemini API의 무료 등급 요청 한도(분당 15회 등)를 초과했습니다. 약 **1~2분 뒤**에 다시 시도해주세요."
-        return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
+            raise ValueError(f"RATE_LIMIT: {str(e)}")
+        raise ValueError(f"ERROR: {str(e)}")
 
 def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, chat_history):
     genai.configure(api_key=api_key)
@@ -488,17 +488,24 @@ else:
                     if not api_key: st.error("API 키가 필요합니다.")
                     else:
                         with st.spinner("AI가 PDF를 직접 읽고 분석 중입니다..."):
-                            pdf_bytes = uploaded_file.getvalue()
-                            result_text = analyze_local_pdf(api_key, selected_model, pdf_bytes, uploaded_file.name, custom_context_upload)
-                            fake_id = str(uuid.uuid4())[:8]
-                            paper_to_save = {
-                                "id": f"local_{fake_id}", "title": uploaded_file.name, "en_title": uploaded_file.name,
-                                "authors": "로컬 업로드 논문", "published": datetime.now().strftime("%Y-%m-%d"),
-                                "summary": "로컬 PDF 분석 데이터", "pdf_url": "로컬파일", "analysis_result": result_text
-                            }
-                            save_paper_to_db(st.session_state.username, paper_to_save)
-                            st.success(f"'{uploaded_file.name}' 저장 완료!")
-                            with st.expander("결과 미리보기", expanded=True): st.markdown(result_text)
+                            try:
+                                pdf_bytes = uploaded_file.getvalue()
+                                result_text = analyze_local_pdf(api_key, selected_model, pdf_bytes, uploaded_file.name, custom_context_upload)
+                                fake_id = str(uuid.uuid4())[:8]
+                                paper_to_save = {
+                                    "id": f"local_{fake_id}", "title": uploaded_file.name, "en_title": uploaded_file.name,
+                                    "authors": "로컬 업로드 논문", "published": datetime.now().strftime("%Y-%m-%d"),
+                                    "summary": "로컬 PDF 분석 데이터", "pdf_url": "로컬파일", "analysis_result": result_text
+                                }
+                                save_paper_to_db(st.session_state.username, paper_to_save)
+                                st.success(f"'{uploaded_file.name}' 저장 완료!")
+                                with st.expander("결과 미리보기", expanded=True): st.markdown(result_text)
+                            except ValueError as e:
+                                err_msg = str(e)
+                                if err_msg.startswith("RATE_LIMIT"):
+                                    st.error(f"🚨 **API 사용량 초과 (Rate Limit)**\n\n현재 무료 한도를 초과했습니다. 잠시 후 다시 시도해주세요.\n\n*(상세 원인: {err_msg})*")
+                                else:
+                                    st.error(f"🚨 분석 중 오류가 발생했습니다: {err_msg}")
 
         st.markdown("---")
         if submit_search and search_input:
@@ -537,8 +544,15 @@ else:
                         if not api_key: st.error("API 키가 필요합니다.")
                         else:
                             with st.spinner("정밀 분석 중..."):
-                                res_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context_search)
-                                st.session_state[f"result_{paper['id']}"] = res_text
+                                try:
+                                    res_text = analyze_paper_with_gemini(api_key, selected_model, paper['pdf_url'], custom_context_search)
+                                    st.session_state[f"result_{paper['id']}"] = res_text
+                                except ValueError as e:
+                                    err_msg = str(e)
+                                    if err_msg.startswith("RATE_LIMIT"):
+                                        st.error(f"🚨 **API 사용량 초과 (Rate Limit)**\n\n현재 무료 한도를 초과했습니다. 잠시 후 다시 시도해주세요.\n\n*(상세 원인: {err_msg})*")
+                                    else:
+                                        st.error(f"🚨 분석 중 오류가 발생했습니다: {err_msg}")
                     if f"result_{paper['id']}" in st.session_state:
                         st.markdown(st.session_state[f"result_{paper['id']}"])
 
