@@ -246,7 +246,8 @@ def search_arxiv_papers(user_query, max_results=4):
     arxiv_query, _ = parse_smart_query(user_query)
     try:
         url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy=relevance&sortOrder=descending"
-        res = requests.get(url, timeout=10)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=10)
         root = ET.fromstring(res.text)
         papers = []
         for entry in root.findall('{http://www.w3.org/2005/Atom}entry'):
@@ -421,13 +422,16 @@ else:
         with col_search:
             st.markdown("### 🌐 ArXiv 스마트 논문 검색")
             with st.form(key="search_form"):
-                search_input = st.text_input("검색어, 연구 주제를 입력하세요")
+                search_input = st.text_input("검색어, 연구 주제를 입력하세요 (엔터키로 검색 가능)")
                 custom_context_search = st.text_area("맞춤형 분석 요구사항 (선택)")
                 submit_search = st.form_submit_button("🚀 검색", use_container_width=True)
 
             if submit_search and search_input:
-                with st.spinner("논문을 찾고 있습니다..."):
-                    st.session_state.search_results = search_arxiv_papers(search_input)
+                with st.spinner("논문을 찾고 있습니다... (잠시만 기다려주세요)"):
+                    results = search_arxiv_papers(search_input)
+                    st.session_state.search_results = results
+                    if not results:
+                        st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
 
             if st.session_state.get("search_results"):
                 for idx, paper in enumerate(st.session_state.search_results):
