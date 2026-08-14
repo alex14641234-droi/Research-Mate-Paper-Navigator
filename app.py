@@ -610,8 +610,6 @@ else:
                     
                     btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
                     
-                    btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
-                    
                     # DB 저장 토글 버튼 & 패널
                     is_save_open = st.session_state.get(f"show_save_{paper['id']}", False)
                     if st.button("💾 내 DB에 저장", key=f"btn_toggle_save_{paper['id']}", type="primary", use_container_width=True):
