@@ -366,8 +366,10 @@ Output ONLY a valid JSON object:
         res = json.loads(text)
         return res.get("passed", False), res.get("reason", "")
     except Exception as e:
+        if "429" in str(e) or "Quota Exceeded" in str(e):
+            raise ValueError("RATE_LIMIT")
         print(f"Phase 3 AI Eval Error: {e}")
-        return True, ""
+        return False, ""
 
 def parse_smart_query(user_query):
     # Fallback legacy regex parser
@@ -399,7 +401,7 @@ def search_arxiv_papers(user_query, api_key=None, model_name=None, max_results=5
         client = arxiv.Client()
         search = arxiv.Search(
             query = query_str,
-            max_results = 50, # fetch candidate pool
+            max_results = 150, # fetch candidate pool
             sort_by = arxiv.SortCriterion.Relevance,
             sort_order = arxiv.SortOrder.Descending
         )
@@ -428,10 +430,15 @@ def search_arxiv_papers(user_query, api_key=None, model_name=None, max_results=5
             all_papers = [p for p in all_papers if p['published'][:4] <= end_year]
             
         filtered_papers = []
+        eval_count = 0
+        status_placeholder = st.empty()
         for p in all_papers:
             if len(filtered_papers) >= max_results: break
+            if eval_count >= 30: break
             
             if post_filter and api_key:
+                eval_count += 1
+                status_placeholder.text(f"🔍 Analyzing paper metadata with AI ({eval_count}/30)...")
                 passed, reason = evaluate_paper_with_llm(api_key, model_name, p, post_filter)
                 if passed:
                     p['reason'] = reason
@@ -443,9 +450,13 @@ def search_arxiv_papers(user_query, api_key=None, model_name=None, max_results=5
                 p['summary'] = translate_to_ko(p['summary'])
                 filtered_papers.append(p)
                 
+        status_placeholder.empty()
+                
         if not filtered_papers and all_papers:
-            filtered_papers = all_papers[:max_results]
-            notice_msg = "⚠️ 요청하신 맞춤형 조건(소속/국적 등)에 완벽히 부합하는 논문이 없어, 검색 키워드 기반으로 가장 관련성 높은 논문으로 대체 안내합니다."
+            if post_filter:
+                notice_msg = "⚠️ 요청하신 맞춤형 조건(예: 한국인 저자, 특정 소속 등)에 정확히 일치하는 논문을 찾지 못했습니다. 검색 키워드를 조금 더 포괄적으로 변경해 보세요."
+            else:
+                filtered_papers = all_papers[:max_results]
             
         return filtered_papers, notice_msg
     except Exception as e:
@@ -760,7 +771,7 @@ else:
                             st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
                 except ValueError as e:
                     if str(e) == "RATE_LIMIT":
-                        st.error("🚨 ArXiv 서버 접근 제한(Rate Limit)에 걸렸습니다. 1~2분 정도 후에 다시 시도해주세요.")
+                        st.error("🚨 API rate limit reached. Please wait a minute before searching again.")
                     else:
                         st.error(f"🚨 ArXiv 서버 응답 지연(Timeout) 또는 접속 오류가 발생했습니다. 잠시 후 다시 시도해 주세요. ({e})")
                     st.session_state.search_results = []
