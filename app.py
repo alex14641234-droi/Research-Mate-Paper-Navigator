@@ -19,10 +19,10 @@ def get_available_models(api_key):
     try:
         genai.configure(api_key=api_key)
         all_models = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        filtered = [m for m in all_models if "3.6" in m or "3.5" in m or "3.1-pro" in m]
+        filtered = [m for m in all_models if ("pro" in m or "flash" in m) and "embedding" not in m and "imagen" not in m and "aqa" not in m]
         return filtered if filtered else all_models
     except Exception:
-        return []
+        return ["gemini-3.1-pro", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-1.5-flash"]
 
 # --- ☁️ 클라우드 데이터베이스 (Firebase Firestore) 초기화 ---
 @st.cache_resource
@@ -451,7 +451,7 @@ else:
                 st.markdown("---")
                 default_idx = 0
                 for i, m in enumerate(available_models):
-                    if "flash" in m and "lite" not in m:
+                    if "3.1" in m or "pro" in m:
                         default_idx = i; break
                 selected_model = st.selectbox("⚙️ AI 모델", options=available_models, index=default_idx)
             else: st.error("API 키 오류")
