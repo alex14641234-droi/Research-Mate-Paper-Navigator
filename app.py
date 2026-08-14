@@ -230,8 +230,14 @@ def translate_to_en(text):
 
 def parse_smart_query(user_query):
     q = user_query.strip().lower()
+
+    # Determine sorting: Default to 'submittedDate' for fresh/recent papers unless relevance is explicitly requested
+    sort_by = "submittedDate"
+    if "관련성" in q or "relevance" in q:
+        sort_by = "relevance"
+
     match = re.search(r'\d{4}\.\d{4,5}', q)
-    if match: return f"id:{match.group(0)}", f"ArXiv ID: {match.group(0)}"
+    if match: return f"id:{match.group(0)}", sort_by
 
     keyword_map = {
         "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
@@ -250,11 +256,15 @@ def parse_smart_query(user_query):
         final_query = " AND ".join(search_terms)
     else:
         clean = re.sub(r'[^\w\s가-힣]', '', q)
-        for word in ["추천해줘", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", "최신", "논문"]:
+        stop_words = [
+            "추천해줘", "추천", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", 
+            "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은"
+        ]
+        for word in stop_words:
             clean = clean.replace(word, "")
         clean = clean.strip()
         
-        if not clean:
+        if not clean or len(clean) < 2:
             clean = "deep learning"
 
         if re.search(r'[가-힣]', clean):
@@ -262,16 +272,20 @@ def parse_smart_query(user_query):
         else:
             en_query = clean
 
-        final_query = f'all:"{en_query}"'
+        en_clean = re.sub(r'[^\w\s]', '', en_query).strip()
+        if not en_clean or en_clean.lower() in ["easy", "easy one", "easy only one", "one", "simple"]:
+            en_clean = "deep learning"
 
-    return urllib.parse.quote(final_query), "번역 검색 완료"
+        final_query = f'all:{en_clean}'
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def search_arxiv_papers(user_query, max_results=4):
+    return urllib.parse.quote(final_query), sort_by
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def search_arxiv_papers(user_query, max_results=5):
     import time
-    arxiv_query, _ = parse_smart_query(user_query)
+    arxiv_query, sort_by = parse_smart_query(user_query)
     try:
-        url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy=relevance&sortOrder=descending"
+        url = f"https://export.arxiv.org/api/query?search_query={arxiv_query}&start=0&max_results={max_results}&sortBy={sort_by}&sortOrder=descending"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         for attempt in range(3):
