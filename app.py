@@ -332,45 +332,51 @@ def search_arxiv_papers(user_query, max_results=5):
 
 # --- 🤖 AI 분석 및 챗봇 로직 (스트리밍) ---
 def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
-    try:
-        genai.configure(api_key=api_key)
-        context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
-        prompt = """
-        당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
-        업로드된 로컬 PDF 논문을 바탕으로 다음 3가지를 가시성이 뛰어나고 깔끔한 마크다운 형식으로 정리해 주십시오:
-        ### 🔗 1. 핵심 요약 및 기여점
-        ### 🧮 2. 핵심 수식 및 변수 분석 (해당 시)
-        ### 📊 3. 주요 아키텍처 및 시각적 인사이트
-        """ + context_prompt
-        model = genai.GenerativeModel(model_name)
-        res = model.generate_content([{"mime_type": "application/pdf", "data": pdf_bytes}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
-        return res.text
-    except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower():
-            raise ValueError(f"RATE_LIMIT: {str(e)}")
-        raise ValueError(f"ERROR: {str(e)}")
+    genai.configure(api_key=api_key)
+    context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}\n(위 요구사항을 최우선적으로 반영하여 분석 리포트를 작성해 주십시오.)" if custom_context else ""
+    prompt = """
+    당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
+    업로드된 로컬 PDF 논문을 바탕으로 다음 3가지를 가시성이 뛰어나고 깔끔한 마크다운 형식으로 정리해 주십시오:
+    ### 🔗 1. 핵심 요약 및 기여점
+    ### 🧮 2. 핵심 수식 및 변수 분석 (해당 시)
+    ### 📊 3. 주요 아키텍처 및 시각적 인사이트
+    """ + context_prompt
+    
+    # Try primary selected model first, with auto-fallback to 3.x flash models on 429 quota error
+    for m_name in [model_name, "gemini-3.6-flash", "gemini-3.5-flash"]:
+        try:
+            model = genai.GenerativeModel(m_name)
+            res = model.generate_content([{"mime_type": "application/pdf", "data": pdf_bytes}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+            return res.text
+        except Exception as e:
+            if ("429" in str(e) or "quota" in str(e).lower()) and m_name != "gemini-3.5-flash":
+                continue # Try fallback model
+            raise ValueError(f"RATE_LIMIT: {str(e)}" if "429" in str(e) or "quota" in str(e).lower() else f"ERROR: {str(e)}")
 
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
-    try:
-        genai.configure(api_key=api_key)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.get(pdf_url, headers=headers, timeout=20)
-        response.raise_for_status()
-        context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}" if custom_context else ""
-        prompt = """
-        당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
-        첨부된 PDF 논문을 바탕으로 다음을 정리해 주십시오:
-        ### 🔗 1. 공식 코드(GitHub) 주소
-        ### 🧮 2. 핵심 수식 및 변수 분석
-        ### 📊 3. 주요 아키텍처 및 시각적 인사이트
-        """ + context_prompt
-        model = genai.GenerativeModel(model_name)
-        res = model.generate_content([{"mime_type": "application/pdf", "data": response.content}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
-        return res.text
-    except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower():
-            raise ValueError(f"RATE_LIMIT: {str(e)}")
-        raise ValueError(f"ERROR: {str(e)}")
+    genai.configure(api_key=api_key)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    response = requests.get(pdf_url, headers=headers, timeout=20)
+    response.raise_for_status()
+    context_prompt = f"\n\n**[사용자의 현재 연구 상황 및 특별 요구사항]**:\n{custom_context}" if custom_context else ""
+    prompt = """
+    당신은 세계 최고 수준의 시각 및 텍스트 융합 논문 분석 전문가입니다.
+    첨부된 PDF 논문을 바탕으로 다음을 정리해 주십시오:
+    ### 🔗 1. 공식 코드(GitHub) 주소
+    ### 🧮 2. 핵심 수식 및 변수 분석
+    ### 📊 3. 주요 아키텍처 및 시각적 인사이트
+    """ + context_prompt
+
+    # Try primary selected model first, with auto-fallback to 3.x flash models on 429 quota error
+    for m_name in [model_name, "gemini-3.6-flash", "gemini-3.5-flash"]:
+        try:
+            model = genai.GenerativeModel(m_name)
+            res = model.generate_content([{"mime_type": "application/pdf", "data": response.content}, prompt], generation_config={"max_output_tokens": 8192, "temperature": 0.2})
+            return res.text
+        except Exception as e:
+            if ("429" in str(e) or "quota" in str(e).lower()) and m_name != "gemini-3.5-flash":
+                continue # Try fallback model
+            raise ValueError(f"RATE_LIMIT: {str(e)}" if "429" in str(e) or "quota" in str(e).lower() else f"ERROR: {str(e)}")
 
 def chat_with_ai_stream(api_key, model_name, user_query, selected_papers_data, chat_history):
     genai.configure(api_key=api_key)
@@ -453,9 +459,13 @@ else:
             
         st.markdown("---")
         st.markdown("### 🔑 Google AI Studio 설정")
-        saved_api_key = get_api_key(st.session_state.username)
-        api_key = st.text_input("Gemini API Key를 입력하세요", type="password", value=saved_api_key)
-        if api_key and api_key != saved_api_key: save_api_key(st.session_state.username, api_key)
+        system_api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+        saved_api_key = get_api_key(st.session_state.username) or system_api_key
+        api_key_input = st.text_input("Gemini API Key (선택)", type="password", value=saved_api_key, help="비워두시면 시스템 기본 API 키가 사용됩니다.")
+        api_key = api_key_input.strip() if api_key_input.strip() else system_api_key
+        
+        if api_key_input and api_key_input != saved_api_key:
+            save_api_key(st.session_state.username, api_key_input)
         
         selected_model = None
         if api_key:
