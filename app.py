@@ -13,7 +13,6 @@ import os
 
 st.set_page_config(page_title="Research Mate", page_icon="🔬", layout="wide")
 
-# ✨ API 키로 접속 가능한 모델 중 3.6, 3.5, 3.1 pro 계열만 쏙 뽑아오는 함수
 @st.cache_data(show_spinner=False)
 def get_available_models(api_key):
     try:
@@ -94,6 +93,27 @@ def get_saved_papers(username):
     papers_ref = db.collection('users').document(username).collection('papers').order_by('saved_at', direction=firestore.Query.DESCENDING)
     return [doc.to_dict() for doc in papers_ref.stream()]
 
+# --- 💬 채팅 기록 DB 로직 ---
+def save_chat_message(username, role, content):
+    if not db: return
+    chat_data = {
+        'role': role,
+        'content': content,
+        'timestamp': datetime.now().isoformat()
+    }
+    db.collection('users').document(username).collection('chat_history').add(chat_data)
+    
+def get_chat_history(username):
+    if not db: return []
+    chats_ref = db.collection('users').document(username).collection('chat_history').order_by('timestamp')
+    return [doc.to_dict() for doc in chats_ref.stream()]
+    
+def clear_chat_history(username):
+    if not db: return
+    chats_ref = db.collection('users').document(username).collection('chat_history')
+    for doc in chats_ref.stream():
+        doc.reference.delete()
+
 # --- 🌐 번역 및 ArXiv 탐색 로직 ---
 def translate_to_ko(text):
     try:
@@ -164,7 +184,7 @@ def search_arxiv_papers(user_query, max_results=4):
     except Exception as e:
         return []
 
-# --- 🤖 초고속 다이렉트 AI 호출 로직 ---
+# --- 🤖 AI 분석 및 챗봇 로직 ---
 def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
     try:
         genai.configure(api_key=api_key)
@@ -200,6 +220,44 @@ def analyze_paper_with_gemini(api_key, model_name, pdf_url, custom_context):
 
     except Exception as e:
         return f"에러 발생: PDF 분석 중 문제가 생겼습니다. {str(e)}"
+
+def chat_with_ai(api_key, model_name, user_query, selected_papers_data, chat_history):
+    try:
+        genai.configure(api_key=api_key)
+        
+        context_str = ""
+        if not selected_papers_data:
+            context_str = "현재 선택된 논문이 없습니다. 일반적인 AI 어시스턴트로서 답변하세요."
+        else:
+            for p in selected_papers_data:
+                context_str += f"- 논문 제목: {p['title']}\n"
+                context_str += f"- 초록 요약: {p['summary']}\n"
+                context_str += f"- 기존 심층분석: {p.get('analysis_result', '분석 안됨')}\n\n"
+
+        history_text = ""
+        for msg in chat_history[-6:]: 
+            role = '사용자' if msg['role'] == 'user' else 'AI 비서'
+            history_text += f"{role}: {msg['content']}\n"
+            
+        prompt = f"""
+당신은 세계 최고 수준의 연구 보조 AI 비서입니다.
+아래 제공된 [선택된 논문 정보]와 [이전 대화 내역]을 참고하여, 사용자의 [질문]에 한국어로 친절하고 전문적으로 답해주세요.
+사용자가 여러 논문을 선택하고 공통점이나 차이점을 물어보면 정확하게 비교 분석해주세요.
+
+[선택된 논문 정보]
+{context_str}
+
+[이전 대화 내역 (최근)]
+{history_text}
+
+[질문]
+{user_query}
+"""
+        model = genai.GenerativeModel(model_name)
+        res = model.generate_content(prompt, generation_config={"temperature": 0.3})
+        return res.text
+    except Exception as e:
+        return f"에러 발생: AI 챗봇 호출 중 문제가 생겼습니다. {str(e)}"
 
 # --- 💻 메인 앱 & UI ---
 
@@ -271,8 +329,6 @@ else:
         
         selected_model = None
         if api_key:
-            # ✨ (수정됨) 알림창이 뜨던 곳을 지웠습니다!
-            
             with st.spinner("사용 가능한 AI 모델 목록을 불러오는 중..."):
                 available_models = get_available_models(api_key)
                 
@@ -299,7 +355,8 @@ else:
     st.caption("AI 기반 맞춤형 심층 분석 및 개인 연구 아카이빙 플랫폼")
     st.markdown("---")
     
-    tab1, tab2 = st.tabs(["🔍 논문 탐색 및 맞춤 분석", "🗄️ 내 연구 DB (My Library)"])
+    # ✨ 3개의 탭으로 확장
+    tab1, tab2, tab3 = st.tabs(["🔍 논문 탐색 및 맞춤 분석", "🗄️ 내 연구 DB (My Library)", "💬 AI 논문 비서"])
 
     with tab1:
         with st.form(key="search_form"):
@@ -385,3 +442,69 @@ else:
                             delete_paper_from_db(st.session_state.username, p['id'])
                             st.rerun() 
                 st.markdown("---")
+
+    # ✨ 3번째 탭: AI 챗봇
+    with tab3:
+        st.markdown("### 💬 AI 논문 비서")
+        st.caption("저장된 논문들을 기반으로 질문하거나 비교 분석을 요청해보세요! (대화 기록은 영구 저장됩니다)")
+        
+        # 1. 비교할 논문 선택
+        saved_papers = get_saved_papers(st.session_state.username)
+        paper_options = {p['title']: p for p in saved_papers}
+        
+        selected_titles = st.multiselect(
+            "🧠 대화에 참고할 논문을 선택하세요 (다중 선택 시 비교 분석 가능):",
+            options=list(paper_options.keys())
+        )
+        selected_papers_data = [paper_options[t] for t in selected_titles]
+        
+        st.markdown("---")
+        
+        # 2. 채팅 내역 표시
+        col1, col2 = st.columns([8, 2])
+        with col2:
+            if st.button("🗑️ 대화 기록 초기화", use_container_width=True):
+                clear_chat_history(st.session_state.username)
+                st.rerun()
+                
+        chat_history = get_chat_history(st.session_state.username)
+        
+        # 채팅창 컨테이너 (스크롤 가능)
+        chat_container = st.container(height=500)
+        with chat_container:
+            if not chat_history:
+                st.info("아직 대화 기록이 없습니다. 궁금한 점을 질문해 보세요!")
+            for msg in chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+        
+        # 3. 채팅 입력창
+        if user_query := st.chat_input("선택한 논문들의 차이점은 뭐야? / 이 알고리즘을 쉽게 설명해줘"):
+            if not api_key or not selected_model:
+                st.error("좌측 사이드바에서 API 키를 입력하고 모델을 선택해주세요.")
+            else:
+                # 사용자 메시지 화면에 표시 및 DB 저장
+                with chat_container:
+                    with st.chat_message("user"):
+                        st.markdown(user_query)
+                save_chat_message(st.session_state.username, "user", user_query)
+                
+                # AI 답변 생성
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        with st.spinner("AI가 생각 중입니다..."):
+                            # DB에서 최신 채팅 내역 다시 불러오기 (지금 보낸 메시지 포함)
+                            updated_history = get_chat_history(st.session_state.username)
+                            
+                            ai_response = chat_with_ai(
+                                api_key, 
+                                selected_model, 
+                                user_query, 
+                                selected_papers_data, 
+                                updated_history
+                            )
+                            st.markdown(ai_response)
+                
+                # AI 메시지 DB 저장
+                save_chat_message(st.session_state.username, "assistant", ai_response)
+                st.rerun()
