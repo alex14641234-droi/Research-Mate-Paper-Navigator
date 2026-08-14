@@ -6,6 +6,7 @@ import urllib.parse
 from datetime import datetime
 import hashlib
 import json
+import arxiv
 import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials
@@ -296,219 +297,159 @@ def parse_year_range(user_query):
     return None, None, None
 
 def parse_query_with_ai(api_key, model_name, user_query):
-    if not api_key:
-        return None
+    if not api_key: return None
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         prompt = f"""
-Analyze the following academic search request and extract the parameters for ArXiv API.
+Analyze the following academic search request and extract structured search criteria for arXiv.
 User Query: "{user_query}"
 
 Output ONLY a valid JSON object with the following keys, no markdown blocks, no extra text:
-- "final_query": The extracted ArXiv query string (e.g. "all:superconductivity AND au:Homin Kim" or "all:\\"autonomous driving\\""). Translate Korean keywords to English. Do not include year or author directly in this query if it can be filtered by target_years or author_ko.
-- "sort_by": "relevance", "lastUpdatedDate", or "submittedDate". Default to "relevance".
-- "target_years": A list of strings representing the target years (e.g. ["2010", "2011"]) if mentioned, else null. (e.g., "2010년" -> ["2010"], "2010년대" -> ["2010", "2011", ..., "2019"])
-- "author_ko": The name of the author in Korean if mentioned, else null.
+- "keywords": list of string keywords (translate Korean to English if needed).
+- "authors": list of string author names or nationalities (e.g. ["Korean"]).
+- "date_start": string "YYYY-MM-DD" or null.
+- "date_end": string "YYYY-MM-DD" or null.
+- "post_filter_instruction": string describing a condition to evaluate on the paper's metadata, or null if no post-filtering is needed. (e.g. "Check if any author's affiliation is a Korean institution or if their name is typically Korean").
 
 JSON Output:
 """
         response = model.generate_content(prompt)
         text = response.text.strip()
-        if text.startswith('```json'):
-            text = text.split('```json')[1].split('```')[0].strip()
-        elif text.startswith('```'):
-            text = text.split('```')[1].split('```')[0].strip()
-            
-        data = json.loads(text)
-        
-        target_years = data.get('target_years')
-        if target_years and len(target_years) == 0:
-            target_years = None
-            
-        return (data.get('final_query'), data.get('sort_by', 'relevance'), target_years, data.get('author_ko'))
+        if text.startswith('```json'): text = text.split('```json')[1].split('```')[0].strip()
+        elif text.startswith('```'): text = text.split('```')[1].split('```')[0].strip()
+        return json.loads(text)
     except Exception as e:
-        print(f"AI Parse Error: {e}")
+        print(f"Phase 1 AI Parse Error: {e}")
         return None
 
-def parse_smart_query(user_query):
-    q = user_query.strip()
-    q_lower = q.lower()
-
-    # 1. Author Intent Detection ("~교수님", "~교수", "~저자", "author:", "by ~")
-    author_match = re.search(r'([가-힣]{2,4}|[A-Za-z\s]+)\s*(교수님|교수|저자|박사님|박사|연구원|작가)', q)
-    author_query = None
-    author_ko = None
-    if author_match:
-        raw_author = author_match.group(1).strip()
-        if re.search(r'[가-힣]', raw_author):
-            author_ko = raw_author
-            translated_author = translate_to_en(raw_author).strip()
-            # Generate common Romanized variants for Korean authors (e.g. Homin Kim, Ho-Min Kim, Kim)
-            author_query = f'au:"{translated_author}" OR all:"{translated_author}"'
-        else:
-            author_query = f'au:"{raw_author}" OR all:"{raw_author}"'
-
-    # 2. Year / Era Intent Detection
-    target_years, start_dt, end_dt = parse_year_range(user_query)
-
-    # 3. Sort Order
-    if any(w in q_lower for w in ["최신", "최근", "recent", "latest", "최근순", "최신순"]):
-        sort_by = "submittedDate"
-    else:
-        sort_by = "relevance"
-
-    # 4. ArXiv ID match
-    match = re.search(r'\d{4}\.\d{4,5}', q_lower)
-    if match: return f"id:{match.group(0)}", sort_by, target_years, author_ko
-
-    # 5. Clean Topic Keyword Extraction
-    clean_q = q
-    if author_match:
-        clean_q = clean_q.replace(author_match.group(0), "")
-
-    clean_q = re.sub(r'\b(19\d{2}|20\d{2})\b', '', clean_q)
-    stop_words = [
-        "추천해줘", "추천", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", 
-        "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은",
-        "년도", "년", "기준", "년대", "초반", "중반", "후반", "교수님", "교수", "저자", "작성자", "관련"
-    ]
-    for word in stop_words:
-        clean_q = clean_q.replace(word, "")
-    clean_q = clean_q.strip()
-
-    search_terms = []
-    if author_query:
-        search_terms.append(f"({author_query})")
-
-    keyword_map = {
-        "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
-        "생성형": 'all:"generative model"', "비전": 'all:"computer vision"', "로봇": 'all:"robotics"',
-        "자율주행": 'all:"autonomous driving"'
-    }
+def generate_arxiv_query(json_data):
+    terms = []
+    if json_data.get('keywords'):
+        kw_terms = [f'all:"{kw}"' for kw in json_data['keywords']]
+        terms.append("(" + " OR ".join(kw_terms) + ")")
+    if json_data.get('authors'):
+        au_terms = []
+        for au in json_data['authors']:
+            if au.lower() in ["korean", "한국인"]:
+                au_terms.extend([f'au:"{name}"' for name in ["Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Jang", "Lim"]])
+            else:
+                au_terms.append(f'au:"{au}"')
+        if au_terms:
+            terms.append("(" + " OR ".join(au_terms) + ")")
     
-    for ko_word, en_query in keyword_map.items():
-        if ko_word in clean_q.lower():
-            search_terms.append(f"({en_query})")
-            
-    if any(w in clean_q.lower() for w in ["ai", "인공지능", "llm", "머신러닝", "딥러닝"]):
-        search_terms.append('(all:"artificial intelligence" OR all:"large language model")')
-        
-    if search_terms:
-        final_query = " AND ".join(search_terms)
-    else:
-        if not clean_q or len(clean_q) < 2:
-            clean_q = "deep learning"
+    query = " AND ".join(terms) if terms else "all:deep learning"
+    return query
 
-        if re.search(r'[가-힣]', clean_q):
-            en_query = translate_to_en(clean_q)
-        else:
-            en_query = clean_q
+def evaluate_paper_with_llm(api_key, model_name, paper_metadata, instruction):
+    if not instruction or not api_key: return True, ""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        prompt = f"""
+Evaluate if the following paper meets the specified condition.
 
-        en_clean = re.sub(r'[^\w\s]', '', en_query).strip()
-        if not en_clean or en_clean.lower() in ["easy", "easy one", "easy only one", "one", "simple"]:
-            en_clean = "deep learning"
+Condition: {instruction}
 
-        final_query = f'all:{en_clean}'
+Paper Metadata:
+Title: {paper_metadata['title']}
+Authors: {paper_metadata['authors']}
+Summary: {paper_metadata['summary']}
 
-    return final_query, sort_by, target_years, author_ko
+Output ONLY a valid JSON object:
+{{"passed": true or false, "reason": "brief explanation in Korean"}}
+"""
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if text.startswith('```json'): text = text.split('```json')[1].split('```')[0].strip()
+        elif text.startswith('```'): text = text.split('```')[1].split('```')[0].strip()
+        res = json.loads(text)
+        return res.get("passed", False), res.get("reason", "")
+    except Exception as e:
+        print(f"Phase 3 AI Eval Error: {e}")
+        return True, ""
+
+def parse_smart_query(user_query):
+    # Fallback legacy regex parser
+    q = user_query.strip().lower()
+    clean_q = re.sub(r'[^a-zA-Z\s]', '', q).strip()
+    if not clean_q: clean_q = "deep learning"
+    return f'all:"{clean_q}"', "relevance", None, None
 
 def search_arxiv_papers(user_query, api_key=None, model_name=None, max_results=5):
-    import time
-    
-    parsed = None
+    # Phase 1: Intent Analysis
+    parsed_json = None
     if api_key and model_name:
-        parsed = parse_query_with_ai(api_key, model_name, user_query)
+        parsed_json = parse_query_with_ai(api_key, model_name, user_query)
         
-    if parsed:
-        raw_query, sort_by, target_years, author_ko = parsed
-        if not raw_query: raw_query = "all:deep learning"
-    else:
-        raw_query, sort_by, target_years, author_ko = parse_smart_query(user_query)
-        
-
-    encoded_query = urllib.parse.quote(raw_query)
     notice_msg = None
-    try:
-        # Fetch 200 candidate papers across years
-        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=200&sortBy={sort_by}&sortOrder=descending"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    if not parsed_json:
+        # Fallback
+        raw_query, sort_by, target_years, author_ko = parse_smart_query(user_query)
+        query_str = raw_query
+        post_filter = None
+    else:
+        # Phase 2: Query Generation
+        query_str = generate_arxiv_query(parsed_json)
+        post_filter = parsed_json.get('post_filter_instruction')
         
-        for attempt in range(3):
-            try:
-                res = requests.get(url, headers=headers, timeout=20)
-                if res.status_code == 429:
-                    if attempt == 2:
-                        raise ValueError("RATE_LIMIT")
-                    time.sleep(3)
-                    continue
-                res.raise_for_status()
-                break
-            except requests.exceptions.RequestException as e:
-                if attempt == 2:
-                    raise ValueError(f"TIMEOUT: {e}")
-                time.sleep(3)
-                continue
-            
-        root = ET.fromstring(res.text)
-        papers = []
-        for entry in root.findall('{http://www.w3.org/2005/Atom}entry'):
-            title = entry.find('{http://www.w3.org/2005/Atom}title').text.replace('\n', ' ').strip()
-            summary = entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip()
-            ko_title = translate_to_ko(title)
-            ko_summary = translate_to_ko(summary)
-            
-            raw_id = entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]
-            clean_id = re.sub(r'v\d+$', '', raw_id)
-            
-            pub_date = entry.find('{http://www.w3.org/2005/Atom}published').text[:10]
-            papers.append({
-                "id": clean_id,
+    try:
+        # Phase 3: Execution and Post-Filtering
+        client = arxiv.Client()
+        search = arxiv.Search(
+            query = query_str,
+            max_results = 50, # fetch candidate pool
+            sort_by = arxiv.SortCriterion.Relevance,
+            sort_order = arxiv.SortOrder.Descending
+        )
+        
+        all_papers = []
+        for result in client.results(search):
+            ko_title = translate_to_ko(result.title.replace('\n', ' ').strip())
+            ko_summary = translate_to_ko(result.summary.replace('\n', ' ').strip())
+            authors = ", ".join([a.name for a in result.authors[:5]])
+            paper_data = {
+                "id": result.get_short_id(),
                 "title": ko_title,
-                "en_title": title,
-                "authors": ", ".join([a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')][:3]),
-                "published": pub_date,
+                "en_title": result.title,
+                "authors": authors,
+                "published": result.published.strftime("%Y-%m-%d"),
                 "summary": ko_summary,
-                "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
-            })
-
-        # 1. Author Filter
-        if author_ko:
-            translated_author = translate_to_en(author_ko).lower()
-            author_tokens = [w for w in re.split(r'\s+', translated_author) if len(w) > 1]
+                "pdf_url": result.pdf_url,
+                "reason": ""
+            }
+            all_papers.append(paper_data)
             
-            author_matches = []
-            for p in papers:
-                p_authors_lower = p['authors'].lower()
-                if any(tok in p_authors_lower for tok in author_tokens):
-                    author_matches.append(p)
+        # Year Filtering if provided
+        if parsed_json and parsed_json.get('date_start'):
+            start_year = parsed_json['date_start'][:4]
+            all_papers = [p for p in all_papers if p['published'][:4] >= start_year]
+        if parsed_json and parsed_json.get('date_end'):
+            end_year = parsed_json['date_end'][:4]
+            all_papers = [p for p in all_papers if p['published'][:4] <= end_year]
             
-            papers = author_matches
-            if not papers:
-                notice_msg = f"⚠️ ArXiv 상위 검색 결과에서 '{author_ko}' 저자(또는 연관 검색어)로 등록된 논문을 찾을 수 없습니다."
-
-        # 2. Strict Python Year Filter / Sort!
-        if target_years:
-            strict_matches = [p for p in papers if any(p['published'].startswith(y) for y in target_years)]
-            if strict_matches:
-                return strict_matches[:max_results], notice_msg
+        filtered_papers = []
+        for p in all_papers:
+            if len(filtered_papers) >= max_results: break
             
-            ref_year = int(target_years[0])
-            papers.sort(key=lambda p: abs(int(p['published'][:4]) - ref_year))
-            
-            y_msg = f"요청하신 연도({target_years[0]}년 등)의 논문이 상위 검색 결과에 부족하여, 가장 연도가 가까운 논문으로 대체 안내합니다."
-            if notice_msg:
-                notice_msg += f" 또한, {y_msg}"
+            if post_filter and api_key:
+                passed, reason = evaluate_paper_with_llm(api_key, model_name, p, post_filter)
+                if passed:
+                    p['reason'] = reason
+                    filtered_papers.append(p)
             else:
-                notice_msg = f"💡 {y_msg}"
+                filtered_papers.append(p)
                 
-            return papers[:max_results], notice_msg
-
-        return papers[:max_results], notice_msg
-    except ValueError as ve:
-        raise ve
-    except Exception:
-        return [], None
+        if not filtered_papers and all_papers:
+            filtered_papers = all_papers[:max_results]
+            notice_msg = "⚠️ 요청하신 맞춤형 조건(소속/국적 등)에 완벽히 부합하는 논문이 없어, 검색 키워드 기반으로 가장 관련성 높은 논문으로 대체 안내합니다."
+            
+        return filtered_papers, notice_msg
+    except Exception as e:
+        if "HTTP Error 429" in str(e):
+            raise ValueError("RATE_LIMIT")
+        raise ValueError(str(e))
 
 # --- 🤖 AI 분석 및 챗봇 로직 (스트리밍) ---
 def analyze_local_pdf(api_key, model_name, pdf_bytes, filename, custom_context):
@@ -831,6 +772,8 @@ else:
                 with st.expander(f"📄 {paper['title'][:40]}...", expanded=False):
                     st.caption(f"✍️ {paper['authors']} | 📅 {paper['published']} | 🆔 {paper['id']}")
                     st.write(f"{paper['summary'][:200]}...")
+                    if paper.get('reason'):
+                        st.info(f"💡 **AI 매칭 이유:** {paper['reason']}")
                     
                     # 🔗 논문 원문 PDF & ArXiv 원문 웹페이지 바로가기 버튼
                     col_link_pdf, col_link_abs = st.columns([1, 1])
