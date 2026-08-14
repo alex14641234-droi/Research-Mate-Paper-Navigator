@@ -610,29 +610,45 @@ else:
                     
                     btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
                     
-                    # DB 저장 팝오버 (카테고리 선택 및 확정)
-                    with st.popover("💾 내 DB에 저장", type="primary", use_container_width=True):
-                        st.markdown("#### 📋 저장할 카테고리 지정")
-                        arxiv_cat_opts = ["➕ 새 카테고리 직접 추가..."] + user_categories
-                        arxiv_sel_cat = st.selectbox("📋 카테고리 선택", options=arxiv_cat_opts, key=f"pop_cat_sel_{paper['id']}")
-                        
-                        arxiv_custom_cat = ""
-                        if arxiv_sel_cat == "➕ 새 카테고리 직접 추가...":
-                            arxiv_custom_cat = st.text_input("새 카테고리명 입력", key=f"pop_custom_cat_{paper['id']}", placeholder="예: 초전도체").strip()
-                        
-                        if st.button("✅ 내 DB에 저장", key=f"btn_confirm_save_{paper['id']}", type="primary", use_container_width=True):
-                            final_arxiv_cat = arxiv_custom_cat if (arxiv_sel_cat == "➕ 새 카테고리 직접 추가..." and arxiv_custom_cat) else (arxiv_sel_cat if arxiv_sel_cat != "➕ 새 카테고리 직접 추가..." else "미분류")
-                            if final_arxiv_cat and final_arxiv_cat not in user_categories and final_arxiv_cat != "미분류":
-                                user_categories.append(final_arxiv_cat)
-                                save_user_categories(st.session_state.username, user_categories)
+                    btn_analyze = st.button("🧠 AI 심층 분석", key=f"ana_{paper['id']}", use_container_width=True)
+                    
+                    # DB 저장 토글 버튼 & 패널
+                    is_save_open = st.session_state.get(f"show_save_{paper['id']}", False)
+                    if st.button("💾 내 DB에 저장", key=f"btn_toggle_save_{paper['id']}", type="primary", use_container_width=True):
+                        st.session_state[f"show_save_{paper['id']}"] = not is_save_open
+                        st.rerun()
 
-                            paper_to_save = paper.copy()
-                            paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
-                            paper_to_save['category'] = final_arxiv_cat
-                            save_paper_to_db(st.session_state.username, paper_to_save)
-                            st.toast(f"🎉 [{final_arxiv_cat}] 카테고리에 논문이 성공적으로 저장되었습니다!", icon="💾")
-                            st.session_state[f"saved_msg_{paper['id']}"] = f"✅ [{final_arxiv_cat}] 카테고리에 성공적으로 저장되었습니다!"
-                            st.rerun()
+                    if st.session_state.get(f"show_save_{paper['id']}", False):
+                        with st.container(border=True):
+                            st.markdown("#### 📋 저장할 카테고리 지정")
+                            arxiv_cat_opts = ["➕ 새 카테고리 직접 추가..."] + user_categories
+                            arxiv_sel_cat = st.selectbox("📋 카테고리 선택", options=arxiv_cat_opts, key=f"pop_cat_sel_{paper['id']}")
+                            
+                            arxiv_custom_cat = ""
+                            if arxiv_sel_cat == "➕ 새 카테고리 직접 추가...":
+                                arxiv_custom_cat = st.text_input("새 카테고리명 입력", key=f"pop_custom_cat_{paper['id']}", placeholder="예: 초전도체").strip()
+                            
+                            cs1, cs2 = st.columns([1, 1])
+                            with cs1:
+                                if st.button("✅ 내 DB에 저장", key=f"btn_confirm_save_{paper['id']}", type="primary", use_container_width=True):
+                                    final_arxiv_cat = arxiv_custom_cat if (arxiv_sel_cat == "➕ 새 카테고리 직접 추가..." and arxiv_custom_cat) else (arxiv_sel_cat if arxiv_sel_cat != "➕ 새 카테고리 직접 추가..." else "미분류")
+                                    if final_arxiv_cat and final_arxiv_cat not in user_categories and final_arxiv_cat != "미분류":
+                                        user_categories.append(final_arxiv_cat)
+                                        save_user_categories(st.session_state.username, user_categories)
+
+                                    paper_to_save = paper.copy()
+                                    paper_to_save['analysis_result'] = st.session_state.get(f"result_{paper['id']}", "분석 안됨")
+                                    paper_to_save['category'] = final_arxiv_cat
+                                    save_paper_to_db(st.session_state.username, paper_to_save)
+                                    
+                                    st.session_state[f"show_save_{paper['id']}"] = False # 패널 자동 닫기!
+                                    st.toast(f"🎉 [{final_arxiv_cat}] 카테고리에 저장되었습니다!", icon="💾")
+                                    st.session_state[f"saved_msg_{paper['id']}"] = f"✅ [{final_arxiv_cat}] 카테고리에 성공적으로 저장되었습니다!"
+                                    st.rerun()
+                            with cs2:
+                                if st.button("❌ 닫기", key=f"btn_close_save_{paper['id']}", use_container_width=True):
+                                    st.session_state[f"show_save_{paper['id']}"] = False
+                                    st.rerun()
 
                     if f"saved_msg_{paper['id']}" in st.session_state:
                         st.success(st.session_state[f"saved_msg_{paper['id']}"])
@@ -716,17 +732,39 @@ else:
                 selected_cat_filter = st.selectbox("📋 카테고리 필터", options=["전체 보기"] + all_existing_cats)
             with c_filter2:
                 st.write("") # alignment spacing
-                with st.popover("➕ 카테고리 추가", use_container_width=True):
-                    new_cat_tab2 = st.text_input("새 카테고리명 입력", key="tab2_new_cat_input", placeholder="예: 초전도체").strip()
-                    if st.button("카테고리 생성", key="btn_create_cat_tab2", type="primary", use_container_width=True):
-                        if new_cat_tab2 and new_cat_tab2 not in user_categories:
-                            user_categories.append(new_cat_tab2)
-                            save_user_categories(st.session_state.username, user_categories)
-                            st.toast(f"✅ '{new_cat_tab2}' 카테고리가 생성되었습니다!", icon="📋")
-                            st.rerun()
+                is_add_open = st.session_state.get("show_add_cat_tab2", False)
+                if st.button("➕ 카테고리 추가", key="btn_toggle_add_cat_tab2", use_container_width=True):
+                    st.session_state["show_add_cat_tab2"] = not is_add_open
+                    st.rerun()
             with c_filter3:
                 st.write("") # alignment spacing
-                with st.popover("🗑️ 카테고리 삭제", use_container_width=True):
+                is_del_open = st.session_state.get("show_del_cat_tab2", False)
+                if st.button("🗑️ 카테고리 삭제", key="btn_toggle_del_cat_tab2", use_container_width=True):
+                    st.session_state["show_del_cat_tab2"] = not is_del_open
+                    st.rerun()
+
+            if st.session_state.get("show_add_cat_tab2", False):
+                with st.container(border=True):
+                    st.markdown("#### ➕ 새 카테고리 생성")
+                    new_cat_tab2 = st.text_input("새 카테고리명 입력", key="tab2_new_cat_input", placeholder="예: 초전도체").strip()
+                    ca1, ca2 = st.columns([1, 1])
+                    with ca1:
+                        if st.button("카테고리 생성", key="btn_create_cat_tab2", type="primary", use_container_width=True):
+                            if new_cat_tab2 and new_cat_tab2 not in user_categories:
+                                user_categories.append(new_cat_tab2)
+                                save_user_categories(st.session_state.username, user_categories)
+                                st.session_state["show_add_cat_tab2"] = False # 패널 자동 닫기!
+                                st.toast(f"✅ '{new_cat_tab2}' 카테고리가 생성되었습니다!", icon="📋")
+                                st.rerun()
+                            elif not new_cat_tab2:
+                                st.error("카테고리명을 입력하세요.")
+                    with ca2:
+                        if st.button("❌ 닫기", key="btn_close_add_cat_tab2", use_container_width=True):
+                            st.session_state["show_add_cat_tab2"] = False
+                            st.rerun()
+
+            if st.session_state.get("show_del_cat_tab2", False):
+                with st.container(border=True):
                     st.markdown("#### 🗑️ 카테고리 개별 삭제")
                     if not user_categories:
                         st.info("삭제할 사용자 카테고리가 없습니다.")
@@ -736,11 +774,18 @@ else:
                         
                         if not papers_in_cat:
                             st.caption("ℹ️ 해당 카테고리에 포함된 논문이 없습니다.")
-                            if st.button("🗑️ 카테고리 삭제 실행", type="primary", key="btn_del_empty_cat", use_container_width=True):
-                                user_categories.remove(cat_to_del)
-                                save_user_categories(st.session_state.username, user_categories)
-                                st.toast(f"✅ '{cat_to_del}' 카테고리가 삭제되었습니다!", icon="🗑️")
-                                st.rerun()
+                            cd1, cd2 = st.columns([1, 1])
+                            with cd1:
+                                if st.button("🗑️ 카테고리 삭제 실행", type="primary", key="btn_del_empty_cat", use_container_width=True):
+                                    user_categories.remove(cat_to_del)
+                                    save_user_categories(st.session_state.username, user_categories)
+                                    st.session_state["show_del_cat_tab2"] = False # 패널 자동 닫기!
+                                    st.toast(f"✅ '{cat_to_del}' 카테고리가 삭제되었습니다!", icon="🗑️")
+                                    st.rerun()
+                            with cd2:
+                                if st.button("❌ 닫기", key="btn_close_del_empty_cat", use_container_width=True):
+                                    st.session_state["show_del_cat_tab2"] = False
+                                    st.rerun()
                         else:
                             st.warning(f"⚠️ **'{cat_to_del}'** 카테고리에 **{len(papers_in_cat)}편**의 논문이 들어 있습니다.")
                             del_action = st.radio("논문 처리 방식 선택", options=["🚚 다른 카테고리로 논문 이동", "🗑️ 논문도 함께 DB에서 삭제"], key="del_cat_action")
@@ -748,24 +793,38 @@ else:
                             other_cats = [c for c in user_categories if c != cat_to_del] + ["미분류"]
                             if del_action == "🚚 다른 카테고리로 논문 이동":
                                 move_target_cat = st.selectbox("이동할 카테고리 선택", options=other_cats, key="move_target_cat_select")
-                                if st.button(f"🚚 논문 {len(papers_in_cat)}편 이동 후 삭제", type="primary", key="btn_move_del_cat", use_container_width=True):
-                                    for p in papers_in_cat:
-                                        p['category'] = move_target_cat
-                                        save_paper_to_db(st.session_state.username, p)
-                                    if cat_to_del in user_categories:
-                                        user_categories.remove(cat_to_del)
-                                        save_user_categories(st.session_state.username, user_categories)
-                                    st.toast(f"🚚 논문 {len(papers_in_cat)}편을 '{move_target_cat}'(으)로 이동하고 '{cat_to_del}' 카테고리를 삭제했습니다!", icon="✅")
-                                    st.rerun()
+                                cm1, cm2 = st.columns([1, 1])
+                                with cm1:
+                                    if st.button(f"🚚 논문 {len(papers_in_cat)}편 이동 후 삭제", type="primary", key="btn_move_del_cat", use_container_width=True):
+                                        for p in papers_in_cat:
+                                            p['category'] = move_target_cat
+                                            save_paper_to_db(st.session_state.username, p)
+                                        if cat_to_del in user_categories:
+                                            user_categories.remove(cat_to_del)
+                                            save_user_categories(st.session_state.username, user_categories)
+                                        st.session_state["show_del_cat_tab2"] = False # 패널 자동 닫기!
+                                        st.toast(f"🚚 논문 {len(papers_in_cat)}편을 '{move_target_cat}'(으)로 이동하고 '{cat_to_del}' 카테고리를 삭제했습니다!", icon="✅")
+                                        st.rerun()
+                                with cm2:
+                                    if st.button("❌ 닫기", key="btn_close_move_del_cat", use_container_width=True):
+                                        st.session_state["show_del_cat_tab2"] = False
+                                        st.rerun()
                             else:
-                                if st.button(f"🔥 논문 {len(papers_in_cat)}편 및 카테고리 삭제", type="primary", key="btn_purge_del_cat", use_container_width=True):
-                                    for p in papers_in_cat:
-                                        delete_paper_from_db(st.session_state.username, p['id'])
-                                    if cat_to_del in user_categories:
-                                        user_categories.remove(cat_to_del)
-                                        save_user_categories(st.session_state.username, user_categories)
-                                    st.toast(f"💥 '{cat_to_del}' 카테고리와 논문 {len(papers_in_cat)}편이 영구 삭제되었습니다!", icon="🗑️")
-                                    st.rerun()
+                                cp1, cp2 = st.columns([1, 1])
+                                with cp1:
+                                    if st.button(f"🔥 논문 {len(papers_in_cat)}편 및 카테고리 삭제", type="primary", key="btn_purge_del_cat", use_container_width=True):
+                                        for p in papers_in_cat:
+                                            delete_paper_from_db(st.session_state.username, p['id'])
+                                        if cat_to_del in user_categories:
+                                            user_categories.remove(cat_to_del)
+                                            save_user_categories(st.session_state.username, user_categories)
+                                        st.session_state["show_del_cat_tab2"] = False # 패널 자동 닫기!
+                                        st.toast(f"💥 '{cat_to_del}' 카테고리와 논문 {len(papers_in_cat)}편이 영구 삭제되었습니다!", icon="🗑️")
+                                        st.rerun()
+                                with cp2:
+                                    if st.button("❌ 닫기", key="btn_close_purge_del_cat", use_container_width=True):
+                                        st.session_state["show_del_cat_tab2"] = False
+                                        st.rerun()
 
             if selected_cat_filter != "전체 보기":
                 display_papers = [p for p in saved_papers if p.get('category', '미분류') == selected_cat_filter]
@@ -785,25 +844,39 @@ else:
                         st.caption(f"📋 **카테고리**: `{p_cat}` | 🆔 {p['id']} | 💾 {p['saved_at']}")
                     with col_p_cat:
                         cur_cat = p.get('category', '미분류')
-                        with st.popover(f"📋 카테고리 변경 ({cur_cat})", use_container_width=True):
-                            mod_cat_opts = ["➕ 새 카테고리 직접 추가..."] + user_categories
-                            cur_idx = mod_cat_opts.index(cur_cat) if cur_cat in mod_cat_opts else 0
-                            selected_mod_cat = st.selectbox("변경할 카테고리", options=mod_cat_opts, index=cur_idx, key=f"mod_sel_{p['id']}")
-                            
-                            custom_mod_cat = ""
-                            if selected_mod_cat == "➕ 새 카테고리 직접 추가...":
-                                custom_mod_cat = st.text_input("새 카테고리명 입력", key=f"mod_custom_{p['id']}", placeholder="예: 초전도체").strip()
+                        is_mod_open = st.session_state.get(f"show_mod_{p['id']}", False)
+                        if st.button(f"📋 카테고리 변경 ({cur_cat})", key=f"btn_toggle_mod_{p['id']}", use_container_width=True):
+                            st.session_state[f"show_mod_{p['id']}"] = not is_mod_open
+                            st.rerun()
+
+                        if st.session_state.get(f"show_mod_{p['id']}", False):
+                            with st.container(border=True):
+                                st.markdown("#### 📋 카테고리 변경")
+                                mod_cat_opts = ["➕ 새 카테고리 직접 추가..."] + user_categories
+                                cur_idx = mod_cat_opts.index(cur_cat) if cur_cat in mod_cat_opts else 0
+                                selected_mod_cat = st.selectbox("변경할 카테고리", options=mod_cat_opts, index=cur_idx, key=f"mod_sel_{p['id']}")
                                 
-                            if st.button("변경 저장", key=f"btn_save_mod_{p['id']}", type="primary", use_container_width=True):
-                                target_mod_cat = custom_mod_cat if (selected_mod_cat == "➕ 새 카테고리 직접 추가..." and custom_mod_cat) else (selected_mod_cat if selected_mod_cat != "➕ 새 카테고리 직접 추가..." else "미분류")
-                                if target_mod_cat and target_mod_cat not in user_categories and target_mod_cat != "미분류":
-                                    user_categories.append(target_mod_cat)
-                                    save_user_categories(st.session_state.username, user_categories)
+                                custom_mod_cat = ""
+                                if selected_mod_cat == "➕ 새 카테고리 직접 추가...":
+                                    custom_mod_cat = st.text_input("새 카테고리명 입력", key=f"mod_custom_{p['id']}", placeholder="예: 초전도체").strip()
                                 
-                                p['category'] = target_mod_cat
-                                save_paper_to_db(st.session_state.username, p)
-                                st.toast(f"✅ 카테고리가 [{target_mod_cat}](으)로 변경되었습니다!", icon="📋")
-                                st.rerun()
+                                cmc1, cmc2 = st.columns([1, 1])
+                                with cmc1:
+                                    if st.button("변경 저장", key=f"btn_save_mod_{p['id']}", type="primary", use_container_width=True):
+                                        target_mod_cat = custom_mod_cat if (selected_mod_cat == "➕ 새 카테고리 직접 추가..." and custom_mod_cat) else (selected_mod_cat if selected_mod_cat != "➕ 새 카테고리 직접 추가..." else "미분류")
+                                        if target_mod_cat and target_mod_cat not in user_categories and target_mod_cat != "미분류":
+                                            user_categories.append(target_mod_cat)
+                                            save_user_categories(st.session_state.username, user_categories)
+                                        
+                                        p['category'] = target_mod_cat
+                                        save_paper_to_db(st.session_state.username, p)
+                                        st.session_state[f"show_mod_{p['id']}"] = False # 패널 자동 닫기!
+                                        st.toast(f"✅ 카테고리가 [{target_mod_cat}](으)로 변경되었습니다!", icon="📋")
+                                        st.rerun()
+                                with cmc2:
+                                    if st.button("❌ 닫기", key=f"btn_close_mod_{p['id']}", use_container_width=True):
+                                        st.session_state[f"show_mod_{p['id']}"] = False
+                                        st.rerun()
 
                     has_analysis = p.get('analysis_result') not in ["분석 안됨", "분석 없음", None]
                     with st.expander("🧠 AI 심층 분석 결과", expanded=has_analysis):
