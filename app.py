@@ -307,7 +307,7 @@ User Query: "{user_query}"
 
 Output ONLY a valid JSON object with the following keys, no markdown blocks, no extra text:
 - "keywords": list of string keywords (translate Korean to English if needed).
-- "authors": list of string author names or nationalities (e.g. ["Korean"]).
+- "authors": list of string author names or nationalities (e.g. ["Korean"]). If the user asks for Korean authors, this MUST be exactly ["Korean"].
 - "date_start": string "YYYY-MM-DD" or null.
 - "date_end": string "YYYY-MM-DD" or null.
 - "post_filter_instruction": string describing a condition to evaluate on the paper's metadata, or null if no post-filtering is needed. (e.g. "Check if any author's affiliation is a Korean institution or if their name is typically Korean").
@@ -406,16 +406,14 @@ def search_arxiv_papers(user_query, api_key=None, model_name=None, max_results=5
         
         all_papers = []
         for result in client.results(search):
-            ko_title = translate_to_ko(result.title.replace('\n', ' ').strip())
-            ko_summary = translate_to_ko(result.summary.replace('\n', ' ').strip())
-            authors = ", ".join([a.name for a in result.authors[:5]])
+            authors = ", ".join([a.name for a in result.authors])
             paper_data = {
                 "id": result.get_short_id(),
-                "title": ko_title,
+                "title": result.title.replace('\n', ' ').strip(),
                 "en_title": result.title,
                 "authors": authors,
                 "published": result.published.strftime("%Y-%m-%d"),
-                "summary": ko_summary,
+                "summary": result.summary.replace('\n', ' ').strip(),
                 "pdf_url": result.pdf_url,
                 "reason": ""
             }
@@ -437,8 +435,12 @@ def search_arxiv_papers(user_query, api_key=None, model_name=None, max_results=5
                 passed, reason = evaluate_paper_with_llm(api_key, model_name, p, post_filter)
                 if passed:
                     p['reason'] = reason
+                    p['title'] = translate_to_ko(p['title'])
+                    p['summary'] = translate_to_ko(p['summary'])
                     filtered_papers.append(p)
             else:
+                p['title'] = translate_to_ko(p['title'])
+                p['summary'] = translate_to_ko(p['summary'])
                 filtered_papers.append(p)
                 
         if not filtered_papers and all_papers:
