@@ -424,7 +424,7 @@ def search_arxiv_papers(user_query, max_results=5):
                 "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
 
-        # 1. Author Filter / Topic Fallback
+        # 1. Author Filter
         if author_ko:
             translated_author = translate_to_en(author_ko).lower()
             author_tokens = [w for w in re.split(r'\s+', translated_author) if len(w) > 1]
@@ -435,31 +435,9 @@ def search_arxiv_papers(user_query, max_results=5):
                 if any(tok in p_authors_lower for tok in author_tokens):
                     author_matches.append(p)
             
-            if author_matches:
-                papers = author_matches
-            else:
-                # If author query returned 0 matches, retry fetching topic-only papers so user NEVER gets 0 results!
-                topic_q = re.sub(r'\(au:[^)]+\)\s*AND\s*', '', raw_query)
-                topic_q = re.sub(r'\s*AND\s*\(au:[^)]+\)', '', topic_q)
-                if topic_q and topic_q != raw_query:
-                    fb_url = f"https://export.arxiv.org/api/query?search_query={urllib.parse.quote(topic_q)}&start=0&max_results=30&sortBy={sort_by}&sortOrder=descending"
-                    fb_res = requests.get(fb_url, headers=headers, timeout=15)
-                    fb_root = ET.fromstring(fb_res.text)
-                    fb_papers = []
-                    for entry in fb_root.findall('{http://www.w3.org/2005/Atom}entry'):
-                        t = entry.find('{http://www.w3.org/2005/Atom}title').text.replace('\n', ' ').strip()
-                        s = entry.find('{http://www.w3.org/2005/Atom}summary').text.replace('\n', ' ').strip()
-                        r_id = entry.find('{http://www.w3.org/2005/Atom}id').text.split('/')[-1]
-                        c_id = re.sub(r'v\d+$', '', r_id)
-                        fb_papers.append({
-                            "id": c_id, "title": translate_to_ko(t), "en_title": t,
-                            "authors": ", ".join([a.find('{http://www.w3.org/2005/Atom}name').text for a in entry.findall('{http://www.w3.org/2005/Atom}author')][:3]),
-                            "published": entry.find('{http://www.w3.org/2005/Atom}published').text[:10],
-                            "summary": translate_to_ko(s), "pdf_url": f"https://arxiv.org/pdf/{c_id}.pdf"
-                        })
-                    if fb_papers:
-                        papers = fb_papers
-                        notice_msg = f"💡 '{author_ko} 교수님/저자'의 ArXiv 직접 등록 논문 외에, 요청하신 주제와 가장 관련성이 높은 주요 학술 논문을 안내해 드립니다."
+            papers = author_matches
+            if not papers:
+                notice_msg = f"⚠️ ArXiv에 '{author_ko}' 저자(또는 연관 검색어)로 등록된 논문을 찾을 수 없습니다."
 
         # 2. Strict Python Year Filter / Sort!
         if target_years:
@@ -778,7 +756,10 @@ else:
                     st.session_state.search_results = results
                     st.session_state.search_notice = notice_msg
                     if not results:
-                        st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
+                        if notice_msg:
+                            st.warning(notice_msg)
+                        else:
+                            st.error("⚠️ 검색 결과가 없거나 ArXiv 서버 응답이 없습니다. 영어 키워드나 다른 검색어로 다시 시도해 보세요.")
                 except ValueError as e:
                     if str(e) == "RATE_LIMIT":
                         st.error("🚨 ArXiv 서버 접근 제한(Rate Limit)에 걸렸습니다. 1~2분 정도 후에 다시 시도해주세요.")
