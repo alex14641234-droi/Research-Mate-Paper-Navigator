@@ -249,14 +249,46 @@ def translate_to_en(text):
     except Exception:
         return text
 
+def parse_year_range(user_query):
+    q = user_query.strip().lower()
+    
+    # Era expressions (e.g., 2000년대 초반 -> 2000~2004)
+    if re.search(r'2000\s*년대\s*(초반|초)', q):
+        return [str(y) for y in range(2000, 2005)], "200001010000", "200412312359"
+    if re.search(r'2000\s*년대\s*(중반|중)', q):
+        return [str(y) for y in range(2004, 2008)], "200401010000", "200712312359"
+    if re.search(r'2000\s*년대\s*(후반|말)', q):
+        return [str(y) for y in range(2007, 2010)], "200701010000", "200912312359"
+    if re.search(r'2000\s*년대', q) or re.search(r'\b2000s\b', q):
+        return [str(y) for y in range(2000, 2010)], "200001010000", "200912312359"
+
+    if re.search(r'2010\s*년대\s*(초반|초)', q):
+        return [str(y) for y in range(2010, 2015)], "201001010000", "201412312359"
+    if re.search(r'2010\s*년대\s*(중반|중)', q):
+        return [str(y) for y in range(2014, 2018)], "201401010000", "201712312359"
+    if re.search(r'2010\s*년대', q) or re.search(r'\b2010s\b', q):
+        return [str(y) for y in range(2010, 2020)], "201001010000", "201912312359"
+
+    if re.search(r'2020\s*년대', q) or re.search(r'\b2020s\b', q):
+        return [str(y) for y in range(2020, 2027)], "202001010000", "202612312359"
+
+    if re.search(r'1990\s*년대', q) or re.search(r'\b1990s\b', q):
+        return [str(y) for y in range(1990, 2000)], "199001010000", "199912312359"
+
+    # Specific single year (e.g. 2024, 2004, 1998)
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', q)
+    if year_match:
+        y_str = year_match.group(1)
+        return [y_str], f"{y_str}01010000", f"{y_str}12312359"
+
+    return None, None, None
+
 def parse_smart_query(user_query):
     q = user_query.strip().lower()
 
-    # Detect target year across full ArXiv history (1991~2026, e.g. 1998, 2024, 2020, etc.)
-    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', q)
-    target_year = year_match.group(1) if year_match else None
+    target_years, start_dt, end_dt = parse_year_range(user_query)
 
-    # Default to 'relevance' (1991년부터 최신까지 연도 상관없이 가장 관련성이 높은 대표 논문 우선 탐색)
+    # Default to 'relevance' (연도 상관없이 검색어/상황과 가장 관련성이 높은 대표 논문 우선)
     # Only switch to 'submittedDate' if the user explicitly requests '최신', '최근', 'recent', or 'latest'
     if any(w in q for w in ["최신", "최근", "recent", "latest", "최근순", "최신순"]):
         sort_by = "submittedDate"
@@ -264,7 +296,7 @@ def parse_smart_query(user_query):
         sort_by = "relevance"
 
     match = re.search(r'\d{4}\.\d{4,5}', q)
-    if match: return f"id:{match.group(0)}", sort_by, target_year
+    if match: return f"id:{match.group(0)}", sort_by, target_years, start_dt, end_dt
 
     keyword_map = {
         "초전도": 'all:"superconductivity" OR all:"HTS"', "트랜스포머": 'all:"transformer" AND all:"attention"',
@@ -287,7 +319,7 @@ def parse_smart_query(user_query):
         stop_words = [
             "추천해줘", "추천", "찾아줘", "대해", "요즘", "핫한", "알려줘", "이슈가", "되는", 
             "최신", "최근", "논문", "쉬운", "쉬운거", "하나만", "하나", "입문", "기초", "재밌는", "좋은", "괜찮은",
-            "년도", "년", "기준"
+            "년도", "년", "기준", "년대", "초반", "중반", "후반"
         ]
         for word in stop_words:
             clean = clean.replace(word, "")
@@ -307,17 +339,17 @@ def parse_smart_query(user_query):
 
         final_query = f'all:{en_clean}'
 
-    if target_year:
-        final_query = f'({final_query}) AND all:"{target_year}"'
+    if start_dt and end_dt:
+        final_query = f'({final_query}) AND submittedDate:[{start_dt} TO {end_dt}]'
 
-    return final_query, sort_by, target_year
+    return final_query, sort_by, target_years, start_dt, end_dt
 
 def search_arxiv_papers(user_query, max_results=5):
     import time
-    raw_query, sort_by, target_year = parse_smart_query(user_query)
+    raw_query, sort_by, target_years, start_dt, end_dt = parse_smart_query(user_query)
     encoded_query = urllib.parse.quote(raw_query)
     try:
-        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=15&sortBy={sort_by}&sortOrder=descending"
+        url = f"https://export.arxiv.org/api/query?search_query={encoded_query}&start=0&max_results=30&sortBy={sort_by}&sortOrder=descending"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
         for attempt in range(3):
@@ -357,11 +389,11 @@ def search_arxiv_papers(user_query, max_results=5):
                 "pdf_url": f"https://arxiv.org/pdf/{clean_id}.pdf"
             })
 
-        # If a specific year (e.g. "2024") was requested, re-sort so papers from target_year appear FIRST!
-        if target_year:
-            matched = [p for p in papers if p['published'].startswith(target_year)]
-            others = [p for p in papers if not p['published'].startswith(target_year)]
-            papers = matched + others
+        # Strict Python Filter for requested Era / Years!
+        if target_years:
+            strict_matches = [p for p in papers if any(p['published'].startswith(y) for y in target_years)]
+            if strict_matches:
+                papers = strict_matches
 
         return papers[:max_results]
     except ValueError as ve:
